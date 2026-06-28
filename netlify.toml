@@ -1,0 +1,11 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# The official Next.js runtime for Netlify. Netlify installs this plugin
+# automatically when it is declared here.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
