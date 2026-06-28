@@ -8,9 +8,7 @@ export const metadata: Metadata = {
     "An evidence-grounded AI coach for training, nutrition & recovery — cited answers, real tools, measured quality.",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
       <body className="min-h-screen antialiased">{children}</body>

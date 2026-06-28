@@ -26,8 +26,8 @@ export default function Home() {
         <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">Lodestar</h1>
 
         <p className="mt-4 max-w-2xl text-lg text-stone-600 dark:text-stone-300">
-          An evidence-grounded AI coach for training, nutrition &amp; recovery — cited
-          answers, real tools, measured quality.
+          An evidence-grounded AI coach for training, nutrition &amp; recovery — cited answers, real
+          tools, measured quality.
         </p>
 
         <section className="mt-12">
@@ -41,9 +41,7 @@ export default function Home() {
                 className="rounded-xl border border-stone-200 bg-white/50 p-4 dark:border-stone-800 dark:bg-white/5"
               >
                 <h3 className="font-semibold">{pillar.title}</h3>
-                <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">
-                  {pillar.body}
-                </p>
+                <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">{pillar.body}</p>
               </div>
             ))}
           </div>
