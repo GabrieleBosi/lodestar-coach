@@ -47,8 +47,7 @@ export default function StatusBadge() {
     };
   }, []);
 
-  const base =
-    "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-medium";
+  const base = "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-medium";
 
   if (state.status === "loading") {
     return (

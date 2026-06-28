@@ -63,10 +63,7 @@ export class GeminiProvider implements LLMProvider {
     return response.text ?? "";
   }
 
-  async *generateStream(
-    prompt: string,
-    opts: GenerateOptions = {},
-  ): AsyncIterable<string> {
+  async *generateStream(prompt: string, opts: GenerateOptions = {}): AsyncIterable<string> {
     const stream = await this.client.models.generateContentStream({
       model: this.config.chatModel,
       contents: prompt,
