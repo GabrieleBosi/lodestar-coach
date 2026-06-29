@@ -15,11 +15,33 @@ export interface GenerateOptions {
   maxOutputTokens?: number;
 }
 
+/**
+ * Embedding task type — lets the model optimise vectors for their use.
+ * Use RETRIEVAL_DOCUMENT when embedding stored content and RETRIEVAL_QUERY
+ * when embedding a search query.
+ */
+export type EmbedTaskType =
+  | "RETRIEVAL_DOCUMENT"
+  | "RETRIEVAL_QUERY"
+  | "SEMANTIC_SIMILARITY"
+  | "CLASSIFICATION"
+  | "CLUSTERING"
+  | "QUESTION_ANSWERING"
+  | "FACT_VERIFICATION"
+  | "CODE_RETRIEVAL_QUERY";
+
+export interface EmbedOptions {
+  /** Output dimensionality (must match the target vector column). */
+  dimensions?: number;
+  /** Optimises the embedding for a particular downstream task. */
+  taskType?: EmbedTaskType;
+}
+
 export interface LLMProvider {
   /** Single-shot text generation. */
   generate(prompt: string, opts?: GenerateOptions): Promise<string>;
   /** Streaming generation; yields text chunks as they arrive. */
   generateStream(prompt: string, opts?: GenerateOptions): AsyncIterable<string>;
   /** Embed one or more texts into vectors. */
-  embed(texts: string[], opts?: { dimensions?: number }): Promise<number[][]>;
+  embed(texts: string[], opts?: EmbedOptions): Promise<number[][]>;
 }
