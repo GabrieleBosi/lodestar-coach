@@ -8,7 +8,7 @@
  */
 import { GoogleGenAI } from "@google/genai";
 
-import type { GenerateOptions, LLMProvider } from "./types";
+import type { EmbedOptions, GenerateOptions, LLMProvider } from "./types";
 
 /** Defaults applied when the corresponding env var is unset. */
 export const DEFAULTS = {
@@ -82,13 +82,24 @@ export class GeminiProvider implements LLMProvider {
     }
   }
 
-  async embed(texts: string[], opts: { dimensions?: number } = {}): Promise<number[][]> {
-    const response = await this.client.models.embedContent({
-      model: this.config.embedModel,
-      contents: texts,
-      config: { outputDimensionality: opts.dimensions ?? this.config.embedDim },
-    });
+  async embed(texts: string[], opts: EmbedOptions = {}): Promise<number[][]> {
+    // `embedContent` treats an array passed to `contents` as the parts of a
+    // SINGLE document (one vector back), so embed one text per call to get one
+    // vector per input.
+    const config = {
+      outputDimensionality: opts.dimensions ?? this.config.embedDim,
+      ...(opts.taskType ? { taskType: opts.taskType } : {}),
+    };
 
-    return (response.embeddings ?? []).map((embedding) => embedding.values ?? []);
+    const vectors: number[][] = [];
+    for (const text of texts) {
+      const response = await this.client.models.embedContent({
+        model: this.config.embedModel,
+        contents: text,
+        config,
+      });
+      vectors.push(response.embeddings?.[0]?.values ?? []);
+    }
+    return vectors;
   }
 }
