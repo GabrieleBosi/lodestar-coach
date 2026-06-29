@@ -56,6 +56,7 @@ responds.
 | `NEXT_PUBLIC_SUPABASE_URL`      | _(required)_         | Supabase project URL (browser-exposed)            |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | _(required)_         | Supabase anon key (browser-exposed)               |
 | `SUPABASE_SERVICE_ROLE_KEY`     | _(server only)_      | Service-role key — **never** expose to the client |
+| `ADMIN_INGEST_TOKEN`            | _(server only)_      | Shared secret guarding `POST /api/ingest`         |
 
 > Verify model IDs against current Gemini docs — the 2.5 series is deprecating
 > ~June 2026; 3.x flash/pro are current.
@@ -75,6 +76,8 @@ responds.
 | `npm run lint`      | Lint with ESLint               |
 | `npm run typecheck` | Type-check with `tsc --noEmit` |
 | `npm run format`    | Format with Prettier           |
+| `npm run ingest`    | Ingest `/knowledge` into the DB |
+| `npm run query`     | Retrieval smoke test (see below) |
 
 ## API
 
@@ -88,6 +91,15 @@ responds.
   "embedDim": 1536,
   "time": "2026-06-28T00:00:00.000Z"
 }
+```
+
+`POST /api/ingest` → re-runs ingestion (admin only). Requires the
+`x-admin-ingest-token` header to match `ADMIN_INGEST_TOKEN`; returns the same
+summary counts as the CLI. Example:
+
+```bash
+curl -X POST http://localhost:3000/api/ingest \
+  -H "x-admin-ingest-token: $ADMIN_INGEST_TOKEN"
 ```
 
 ## Database (Supabase)
@@ -128,6 +140,35 @@ add your site origin(s) to the Supabase dashboard under
 **Authentication → URL Configuration** (the local default is
 `http://localhost:3000`).
 
+## Knowledge base & ingestion
+
+The knowledge base is a folder of markdown files in [`knowledge/`](./knowledge),
+each with YAML frontmatter (`title`, `source_url`, `license`, `summary`).
+
+**Content & licensing rules:** use only openly-licensed / public-domain material
+or your own original summaries in your own words — never paste copyrighted bulk
+text. Where a claim needs an authoritative citation you don't yet have, write the
+content and add a `TODO: verify source` marker rather than inventing a reference.
+
+**Ingestion** (`npm run ingest`) reads every file, upserts a `documents` row,
+chunks the body (markdown-aware, ~550-token budget with ~15% overlap, heading path
+preserved), computes a `sha256` content hash per chunk, and embeds new/changed
+chunks with `gemini-embedding-2` @1536 dims (`RETRIEVAL_DOCUMENT`) in batches with
+retry/backoff. It is **idempotent**: unchanged chunks are skipped, changed chunks
+are re-embedded, and chunks removed from a doc are deleted — re-running never
+duplicates. It prints counts (added/updated/skipped/deleted), tokens embedded, and
+an approximate cost. Requires `SUPABASE_SERVICE_ROLE_KEY` (chunks are
+service-role-write-only) and `GEMINI_API_KEY`.
+
+**Retrieval smoke test:**
+
+```bash
+npm run query -- "how should I structure a deload week?"
+```
+
+This embeds the query (`RETRIEVAL_QUERY` @1536), calls the `match_chunks` RPC, and
+prints the top results with similarity, source title, heading, and a snippet.
+
 ## Project structure
 
 ```
@@ -136,6 +177,7 @@ app/
   page.tsx                # landing page
   globals.css             # Tailwind v4 entry
   api/health/route.ts     # health endpoint
+  api/ingest/route.ts     # admin re-index (token-protected)
   login/page.tsx          # magic-link sign-in
   auth/callback/route.ts  # OAuth/PKCE code exchange
   app/page.tsx            # auth-gated app shell
@@ -145,7 +187,7 @@ components/
 middleware.ts             # refreshes the Supabase session per request
 lib/
   llm/                    # provider-agnostic LLM layer
-    types.ts              # LLMProvider interface
+    types.ts              # LLMProvider interface + embed options
     gemini.ts             # Gemini implementation
     index.ts              # singleton provider
   db/
@@ -153,7 +195,13 @@ lib/
     admin.ts              # service-role client (server-only)
     middleware.ts         # updateSession helper
     types.ts              # generated DB types
-  rag/                    # (Session 3+)
+  rag/
+    chunk.ts              # markdown-aware chunking + hashing
+    ingest.ts             # idempotent ingestion engine
+knowledge/                # markdown knowledge base (frontmatter + body)
+scripts/
+  ingest.ts               # `npm run ingest`
+  query.ts                # `npm run query -- "..."`
 supabase/
   migrations/             # timestamped SQL migrations
 ```
@@ -165,7 +213,7 @@ swappable without touching call sites.
 
 - **Session 1 — Skeleton ✅:** scaffold, LLM provider abstraction, health endpoint, landing page, CI, deploy.
 - **Session 2 — Data & auth ✅:** Supabase pgvector schema, RLS, vector match functions, magic-link auth, gated `/app`, generated types.
-- **Session 3 — Ingestion & RAG:** evidence ingestion, embeddings, retrieval, and citations.
+- **Session 3 — Ingestion & embeddings ✅:** knowledge base, idempotent ingestion pipeline, 1536-dim embeddings, `match_chunks` retrieval, admin re-index route.
 - **Session 4 — Chat:** conversational coaching UI and streaming responses.
 - **Session 5 — Agent:** tools and agentic workflows.
 - **Session 6 — Evaluation & safety:** quality metrics and safety guardrails.
