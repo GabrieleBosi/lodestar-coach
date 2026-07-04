@@ -237,9 +237,7 @@ export async function runIngestion(opts: IngestOptions): Promise<IngestSummary> 
         };
       });
 
-      const { error } = await supabase
-        .from("chunks")
-        .upsert(rows, { onConflict: "content_hash" });
+      const { error } = await supabase.from("chunks").upsert(rows, { onConflict: "content_hash" });
       if (error) throw error;
     }
 
@@ -259,8 +257,7 @@ export async function runIngestion(opts: IngestOptions): Promise<IngestSummary> 
     );
   }
 
-  summary.approxCostUsd =
-    (summary.tokensEmbedded / 1_000_000) * APPROX_USD_PER_MILLION_TOKENS;
+  summary.approxCostUsd = (summary.tokensEmbedded / 1_000_000) * APPROX_USD_PER_MILLION_TOKENS;
 
   return summary;
 }
