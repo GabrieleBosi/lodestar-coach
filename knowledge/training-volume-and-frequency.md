@@ -27,7 +27,7 @@ hypertrophy.
 Total weekly volume appears to matter more than how it is split up. Training a
 muscle **2–3 times per week** lets you distribute volume into higher-quality
 sessions compared with cramming everything into one. Frequency is mostly a tool
-for *organising* volume and managing per-session fatigue, not an independent magic
+for _organising_ volume and managing per-session fatigue, not an independent magic
 variable.
 
 ## Strength vs. hypertrophy emphasis

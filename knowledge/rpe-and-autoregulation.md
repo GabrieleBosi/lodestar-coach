@@ -28,7 +28,7 @@ leaving one to three reps in reserve on working sets.
 
 Readiness fluctuates with sleep, stress, nutrition, and life load. A load that is
 an RPE 8 on a good day might be an RPE 9–10 on a poor one. Autoregulation lets you
-hit the intended *effort* even when the right *load* changes day to day, keeping
+hit the intended _effort_ even when the right _load_ changes day to day, keeping
 the stimulus appropriate and reducing wasted or risky sessions.
 
 ## How to apply it

@@ -42,5 +42,5 @@ to stalls and injury risk.
   recovery, not to simply add more.
 
 Progressive overload sits underneath nearly every other training method:
-periodization, autoregulation, and volume landmarks are all ways of *managing*
+periodization, autoregulation, and volume landmarks are all ways of _managing_
 overload over time.
