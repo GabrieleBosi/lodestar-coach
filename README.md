@@ -2,7 +2,7 @@
 
 > An evidence-grounded, agentic AI coach for training, nutrition & recovery — cited answers, real tools, measured quality.
 
-Lodestar is being built in stages. **Through Session 2** it is a deployable Next.js app with a provider-agnostic LLM layer, a health endpoint, a landing page, and a full Supabase data layer: pgvector schema, Row-Level Security, vector match functions, and magic-link auth with a gated `/app`. Ingestion/embeddings, chat, RAG, and evaluation come in later sessions (see the [Roadmap](#roadmap)).
+Lodestar is being built in stages. **Through Session 4** it is a deployable Next.js app with a provider-agnostic LLM layer, a full Supabase data layer (pgvector schema, RLS, vector + keyword search), magic-link auth, an embedded knowledge base with an idempotent ingestion pipeline, and a **grounded RAG chat** at `/app` — streaming, cited answers with a sources panel and safety guardrails. Agent tools and evaluation come in later sessions (see the [Roadmap](#roadmap)).
 
 > **Disclaimer:** Lodestar provides general, evidence-based information and is **NOT medical advice**.
 
@@ -68,15 +68,15 @@ responds.
 
 ## Scripts
 
-| Script              | Description                    |
-| ------------------- | ------------------------------ |
-| `npm run dev`       | Start the dev server           |
-| `npm run build`     | Production build               |
-| `npm run start`     | Serve the production build     |
-| `npm run lint`      | Lint with ESLint               |
-| `npm run typecheck` | Type-check with `tsc --noEmit` |
-| `npm run format`    | Format with Prettier           |
-| `npm run ingest`    | Ingest `/knowledge` into the DB |
+| Script              | Description                      |
+| ------------------- | -------------------------------- |
+| `npm run dev`       | Start the dev server             |
+| `npm run build`     | Production build                 |
+| `npm run start`     | Serve the production build       |
+| `npm run lint`      | Lint with ESLint                 |
+| `npm run typecheck` | Type-check with `tsc --noEmit`   |
+| `npm run format`    | Format with Prettier             |
+| `npm run ingest`    | Ingest `/knowledge` into the DB  |
 | `npm run query`     | Retrieval smoke test (see below) |
 
 ## API
@@ -169,6 +169,26 @@ npm run query -- "how should I structure a deload week?"
 This embeds the query (`RETRIEVAL_QUERY` @1536), calls the `match_chunks` RPC, and
 prints the top results with similarity, source title, heading, and a snippet.
 
+## Grounded chat
+
+The `/app` workspace is a streaming, cited RAG chat (auth-gated).
+
+- **Hybrid retrieval** (`lib/rag/retrieve.ts`): vector search (`match_chunks`) +
+  Postgres full-text keyword search (`match_chunks_keyword`), fused with Reciprocal
+  Rank Fusion, returning the top-k chunks with source metadata.
+- **Grounded prompt** (`lib/rag/prompt.ts`): injects numbered context with `[n]`
+  citation markers and instructs the model to answer only from context, cite
+  sources, and say _"I don't have enough grounded information on that yet"_ when the
+  context is insufficient.
+- **Guardrails**: Lodestar is an evidence-based coach, **not** a medical
+  professional — it adds a disclaimer to health guidance, refuses diagnosis and
+  out-of-scope requests, and responds supportively (never with harmful plans) to
+  unsafe intent.
+- **`POST /api/chat`** streams the answer via `gemini-3.5-flash` and persists the
+  conversation and each message to Supabase (citations, tokens in/out, latency, and
+  an approximate cost). `GET /api/conversations` lists a user's threads and messages.
+  Both are RLS-scoped to the signed-in user.
+
 ## Project structure
 
 ```
@@ -214,7 +234,7 @@ swappable without touching call sites.
 - **Session 1 — Skeleton ✅:** scaffold, LLM provider abstraction, health endpoint, landing page, CI, deploy.
 - **Session 2 — Data & auth ✅:** Supabase pgvector schema, RLS, vector match functions, magic-link auth, gated `/app`, generated types.
 - **Session 3 — Ingestion & embeddings ✅:** knowledge base, idempotent ingestion pipeline, 1536-dim embeddings, `match_chunks` retrieval, admin re-index route.
-- **Session 4 — Chat:** conversational coaching UI and streaming responses.
+- **Session 4 — Grounded chat ✅:** hybrid retrieval, cited streaming answers, safety guardrails, message/conversation persistence, chat UI.
 - **Session 5 — Agent:** tools and agentic workflows.
 - **Session 6 — Evaluation & safety:** quality metrics and safety guardrails.
 
