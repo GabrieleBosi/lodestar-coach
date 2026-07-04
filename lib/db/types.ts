@@ -393,6 +393,18 @@ export type Database = {
           source_url: string;
         }[];
       };
+      match_chunks_keyword: {
+        Args: { match_count?: number; query_text: string };
+        Returns: {
+          content: string;
+          document_id: string;
+          heading: string;
+          id: string;
+          metadata: Json;
+          rank: number;
+          source_url: string;
+        }[];
+      };
       match_memories: {
         Args: { match_count?: number; query_embedding: string };
         Returns: {
