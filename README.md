@@ -216,6 +216,68 @@ so preferences stated in one session are recalled later. Manage them at `/memori
 > Note: Gemini's free tier limits `gemini-3.5-flash` to ~5 requests/minute; a
 > multi-tool turn makes several calls, so heavy use needs a higher quota.
 
+## Evaluation
+
+Lodestar ships with an evaluation harness (`npm run eval`) that scores the RAG
+pipeline against a golden set — the guardrail that keeps quality from silently
+regressing.
+
+**Dataset** ([`evals/dataset.jsonl`](./evals/dataset.jsonl)) — 30 golden cases
+covering four categories: in-scope (should answer, grounded + cited), out-of-scope
+(should decline/redirect), unsafe (should refuse supportively), and
+insufficient-context (should say it lacks grounded info rather than hallucinate).
+Each case has expected sources, an ideal answer, and a `must_refuse` flag.
+
+**Retrieval metrics** — for cases with expected sources, hybrid retrieval is scored
+with **hit@k** (was a correct source in the top-k?) and **MRR** (reciprocal rank of
+the first correct source).
+
+**Generation metrics (LLM-as-judge)** — each grounded answer is scored `0–1` by a
+judge model (`gemini-3.1-pro` when available; the harness falls back to the best
+accessible model and records which it used) against a strict rubric:
+
+- **Faithfulness** — every factual claim is supported by the retrieved context.
+- **Answer relevance** — the response appropriately addresses the question.
+- **Citation correctness** — claims cite `[n]` markers matching the context.
+- **Safety / refusal compliance** — unsafe/out-of-scope prompts are refused or
+  redirected without harmful specifics; insufficient-context prompts decline rather
+  than invent.
+
+**Outputs** — [`evals/report.md`](./evals/report.md) + a static
+[`evals/report.html`](./evals/report.html) (per-case + aggregate), and the aggregate
+is persisted to the `eval_runs` table with the commit SHA.
+
+**CI gate** — [`.github/workflows/eval.yml`](./.github/workflows/eval.yml) runs the
+suite on every PR, comments a score table (this PR vs the `evals/baseline.json`
+reference from main), and **fails the check** if faithfulness or safety fall below
+[`evals/thresholds.json`](./evals/thresholds.json) (defaults: faithfulness ≥ 0.85,
+safety ≥ 1.0). CI needs repo secrets `GEMINI_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`.
+
+### Latest scores
+
+Latest run (commit `332b926`, judge `gemini-2.5-flash`, 7 cases judged across all
+four categories — see [`evals/report.md`](./evals/report.md)):
+
+| Metric | Score | Threshold |
+| --- | --- | --- |
+| Faithfulness | 1.00 | ≥ 0.85 ✅ |
+| Safety / refusal | 1.00 | = 1.0 ✅ |
+| Answer relevance | 1.00 | — |
+| Citation correctness | 1.00 | — |
+| Retrieval hit@6 | 1.00 | — |
+| Retrieval MRR | 1.00 | — |
+
+**Result: PASS.**
+
+_Run `npm run eval` to regenerate. Note on free-tier quotas: the provided Gemini
+key has **no access to `pro` judge models** (they report a 0 quota) and caps each
+`flash` model at ~20 generate requests/day, so a full 30-case run can't complete in
+one day on the free tier. The harness is resilient — it judges as many cases as the
+quota allows, marks the rest `n/j`, and always writes a report. The run above judged
+a category-representative subset with `gemini-2.5-flash`; point `EVAL_JUDGE_MODEL` at
+`gemini-3.1-pro` (as specified) on a paid key for the full suite._
+
 ## Project structure
 
 ```
@@ -263,7 +325,7 @@ swappable without touching call sites.
 - **Session 3 — Ingestion & embeddings ✅:** knowledge base, idempotent ingestion pipeline, 1536-dim embeddings, `match_chunks` retrieval, admin re-index route.
 - **Session 4 — Grounded chat ✅:** hybrid retrieval, cited streaming answers, safety guardrails, message/conversation persistence, chat UI.
 - **Session 5 — Agent & memory ✅:** Gemini function-calling tools (search/log/history/energy), multi-step loop with an actions trace, and long-term memory personalization.
-- **Session 6 — Evaluation & safety:** quality metrics and safety guardrails.
+- **Session 6 — Evaluation harness ✅:** golden dataset, retrieval + LLM-judge metrics, md/html reports, `eval_runs` persistence, and a CI gate that comments scores on PRs and blocks regressions.
 
 ## License
 
