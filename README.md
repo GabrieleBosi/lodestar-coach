@@ -2,7 +2,7 @@
 
 > An evidence-grounded, agentic AI coach for training, nutrition & recovery — cited answers, real tools, measured quality.
 
-Lodestar is being built in stages. **Through Session 4** it is a deployable Next.js app with a provider-agnostic LLM layer, a full Supabase data layer (pgvector schema, RLS, vector + keyword search), magic-link auth, an embedded knowledge base with an idempotent ingestion pipeline, and a **grounded RAG chat** at `/app` — streaming, cited answers with a sources panel and safety guardrails. Agent tools and evaluation come in later sessions (see the [Roadmap](#roadmap)).
+Lodestar is being built in stages. **Through Session 5** it is a deployable Next.js app with a provider-agnostic LLM layer, a full Supabase data layer (pgvector schema, RLS, vector + keyword search), magic-link auth, an embedded knowledge base with an idempotent ingestion pipeline, a **grounded RAG chat** at `/app` (streaming, cited, guardrailed), and an **agentic tool layer with long-term memory** — the coach can search the knowledge base, log workouts/nutrition, read the user's history, compute safe energy targets, and remember durable preferences across sessions. Evaluation comes next (see the [Roadmap](#roadmap)).
 
 > **Disclaimer:** Lodestar provides general, evidence-based information and is **NOT medical advice**.
 
@@ -189,6 +189,33 @@ The `/app` workspace is a streaming, cited RAG chat (auth-gated).
   an approximate cost). `GET /api/conversations` lists a user's threads and messages.
   Both are RLS-scoped to the signed-in user.
 
+## Agent & memory
+
+`/api/chat` runs an **agentic loop** over Gemini function calling (`lib/agent/`).
+The model selects tools; each is zod-validated, executed server-side against the
+user's RLS-scoped client, and writes a `traces` row. Tools:
+
+- **search_knowledge** — hybrid RAG retrieval (for grounded, cited claims).
+- **log_workout** / **log_nutrition** — record sessions and meals.
+- **get_history** — the user's own workout/nutrition series for trend questions.
+- **compute_energy_targets** — Mifflin–St Jeor TDEE + macro split, with **safety
+  clamps**: intake is never returned below BMR or a conservative floor, aggressive
+  deficits/surpluses are clamped, and unsafe requests come back with explicit
+  warnings.
+
+The loop caps steps, feeds tool errors back to the model to recover, and streams
+the final answer. The UI shows an **"actions taken"** trace (the tools used) above
+each answer.
+
+**Long-term memory:** after each turn, durable facts/preferences are extracted,
+embedded (@1536), and stored in `memories`. Before answering, relevant memories
+(`match_memories`) plus the user's profile are injected as personalization context,
+so preferences stated in one session are recalled later. Manage them at `/memories`
+("What I remember") — view and delete. `GET`/`DELETE /api/memories`.
+
+> Note: Gemini's free tier limits `gemini-3.5-flash` to ~5 requests/minute; a
+> multi-tool turn makes several calls, so heavy use needs a higher quota.
+
 ## Project structure
 
 ```
@@ -235,7 +262,7 @@ swappable without touching call sites.
 - **Session 2 — Data & auth ✅:** Supabase pgvector schema, RLS, vector match functions, magic-link auth, gated `/app`, generated types.
 - **Session 3 — Ingestion & embeddings ✅:** knowledge base, idempotent ingestion pipeline, 1536-dim embeddings, `match_chunks` retrieval, admin re-index route.
 - **Session 4 — Grounded chat ✅:** hybrid retrieval, cited streaming answers, safety guardrails, message/conversation persistence, chat UI.
-- **Session 5 — Agent:** tools and agentic workflows.
+- **Session 5 — Agent & memory ✅:** Gemini function-calling tools (search/log/history/energy), multi-step loop with an actions trace, and long-term memory personalization.
 - **Session 6 — Evaluation & safety:** quality metrics and safety guardrails.
 
 ## License
