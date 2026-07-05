@@ -2,7 +2,7 @@
 
 > An evidence-grounded, agentic AI coach for training, nutrition & recovery — cited answers, real tools, measured quality.
 
-Lodestar is being built in stages. **Through Session 5** it is a deployable Next.js app with a provider-agnostic LLM layer, a full Supabase data layer (pgvector schema, RLS, vector + keyword search), magic-link auth, an embedded knowledge base with an idempotent ingestion pipeline, a **grounded RAG chat** at `/app` (streaming, cited, guardrailed), and an **agentic tool layer with long-term memory** — the coach can search the knowledge base, log workouts/nutrition, read the user's history, compute safe energy targets, and remember durable preferences across sessions. Evaluation comes next (see the [Roadmap](#roadmap)).
+Lodestar is a deployable Next.js app with a provider-agnostic LLM layer, a full Supabase data layer (pgvector schema, RLS, vector + keyword search), magic-link auth, an embedded knowledge base with an idempotent ingestion pipeline, a **grounded RAG chat** at `/app` (streaming, cited, guardrailed), an **agentic tool layer with long-term memory**, an **evaluation harness** with a CI gate, and **production polish**: full request tracing, an admin metrics dashboard, response/embedding caching, per-user rate limiting with graceful degradation, a profile/onboarding flow, and a **public no-signup demo** at [`/demo`](https://lodestar-coach.netlify.app/demo).
 
 > **Disclaimer:** Lodestar provides general, evidence-based information and is **NOT medical advice**.
 
@@ -57,6 +57,10 @@ responds.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | _(required)_         | Supabase anon key (browser-exposed)               |
 | `SUPABASE_SERVICE_ROLE_KEY`     | _(server only)_      | Service-role key — **never** expose to the client |
 | `ADMIN_INGEST_TOKEN`            | _(server only)_      | Shared secret guarding `POST /api/ingest`         |
+| `ADMIN_EMAILS`                  | _(server only)_      | Comma-separated emails allowed to view `/app/metrics` |
+| `DEMO_USER_ID`                  | _(server only)_      | Seeded demo user id for the public `/demo`        |
+| `CHAT_RATE_LIMIT_PER_MIN`       | `20`                 | Per-user chat requests / minute                   |
+| `DEMO_RATE_LIMIT`               | `40`                 | Global demo requests / 10 min                     |
 
 > Verify model IDs against current Gemini docs — the 2.5 series is deprecating
 > ~June 2026; 3.x flash/pro are current.
@@ -259,14 +263,14 @@ safety ≥ 1.0). CI needs repo secrets `GEMINI_API_KEY`, `NEXT_PUBLIC_SUPABASE_U
 Latest run (commit `332b926`, judge `gemini-2.5-flash`, 7 cases judged across all
 four categories — see [`evals/report.md`](./evals/report.md)):
 
-| Metric | Score | Threshold |
-| --- | --- | --- |
-| Faithfulness | 1.00 | ≥ 0.85 ✅ |
-| Safety / refusal | 1.00 | = 1.0 ✅ |
-| Answer relevance | 1.00 | — |
-| Citation correctness | 1.00 | — |
-| Retrieval hit@6 | 1.00 | — |
-| Retrieval MRR | 1.00 | — |
+| Metric               | Score | Threshold |
+| -------------------- | ----- | --------- |
+| Faithfulness         | 1.00  | ≥ 0.85 ✅ |
+| Safety / refusal     | 1.00  | = 1.0 ✅  |
+| Answer relevance     | 1.00  | —         |
+| Citation correctness | 1.00  | —         |
+| Retrieval hit@6      | 1.00  | —         |
+| Retrieval MRR        | 1.00  | —         |
 
 **Result: PASS.**
 
@@ -277,6 +281,25 @@ one day on the free tier. The harness is resilient — it judges as many cases a
 quota allows, marks the rest `n/j`, and always writes a report. The run above judged
 a category-representative subset with `gemini-2.5-flash`; point `EVAL_JUDGE_MODEL` at
 `gemini-3.1-pro` (as specified) on a paid key for the full suite._
+
+## Product & observability
+
+- **Tracing** — every LLM call, tool call, retrieval, and request writes a `traces`
+  row (stage, tokens, latency, cost, request_id).
+- **Metrics dashboard** — `/app/metrics` (admin-gated via `ADMIN_EMAILS`) shows
+  requests over time, p50/p95 latency, tokens & estimated cost per day, tool-usage
+  breakdown, and retrieval hit-rate, served by `GET /api/metrics` (`lib/metrics.ts`).
+- **Caching** — `CachingProvider` (`lib/llm/cache.ts`) keys embeddings/generations by
+  a sha256 of the normalized input (+ model) in the `llm_cache` table, so repeats
+  don't re-hit the API.
+- **Rate limiting** — per-user (chat) and global (demo) limits via `lib/agent/ratelimit.ts`.
+- **Graceful degradation** — model calls are wrapped with a timeout + one retry; if
+  Gemini stays unavailable the agent returns a friendly message instead of erroring.
+- **Profile / onboarding** — `/profile` (`GET`/`PUT /api/profile`) feeds
+  personalization and `compute_energy_targets`.
+- **Public demo** — `/demo` runs as a shared, pre-seeded demo user via
+  `POST /api/demo/chat` (service-role, globally rate-limited), so anyone can try the
+  grounded, cited agent without signing up.
 
 ## Project structure
 
@@ -326,6 +349,7 @@ swappable without touching call sites.
 - **Session 4 — Grounded chat ✅:** hybrid retrieval, cited streaming answers, safety guardrails, message/conversation persistence, chat UI.
 - **Session 5 — Agent & memory ✅:** Gemini function-calling tools (search/log/history/energy), multi-step loop with an actions trace, and long-term memory personalization.
 - **Session 6 — Evaluation harness ✅:** golden dataset, retrieval + LLM-judge metrics, md/html reports, `eval_runs` persistence, and a CI gate that comments scores on PRs and blocks regressions.
+- **Session 7 — Productionization ✅:** full request tracing + admin metrics dashboard, response/embedding cache, per-user rate limiting + graceful degradation, profile/onboarding, a redesigned landing page, and a public no-signup demo.
 
 ## License
 

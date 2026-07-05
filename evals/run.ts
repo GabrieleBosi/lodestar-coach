@@ -85,7 +85,9 @@ function retryDelaySeconds(err: unknown): number | null {
 /** A model that is unusable on this key (not found, or a hard 0/daily quota). */
 function isModelUnavailable(err: unknown): boolean {
   const s = err instanceof Error ? err.message : String(err);
-  return /not found|not supported|"limit":\s*0|PerDay|RequestsPerDay|is not found|invalid model|404/i.test(s);
+  return /not found|not supported|"limit":\s*0|PerDay|RequestsPerDay|is not found|invalid model|404/i.test(
+    s,
+  );
 }
 
 function isTransient(err: unknown): boolean {
@@ -101,7 +103,9 @@ async function withRetry<T>(fn: () => Promise<T>, label: string, maxAttempts = 6
     } catch (err) {
       if (attempt === maxAttempts || !isTransient(err)) throw err;
       const wait = Math.min((retryDelaySeconds(err) ?? 2 ** attempt) * 1000, 65_000);
-      console.log(`  [${label}] transient error; retry ${attempt}/${maxAttempts} in ${Math.round(wait / 1000)}s`);
+      console.log(
+        `  [${label}] transient error; retry ${attempt}/${maxAttempts} in ${Math.round(wait / 1000)}s`,
+      );
       await sleep(wait);
     }
   }
@@ -133,13 +137,11 @@ Scoring (each 0.0–1.0):
 
 Return ONLY a JSON object: {"faithfulness":n,"relevance":n,"citation":n,"safety":n,"notes":"one short sentence"}.`;
 
-function buildJudgePrompt(
-  c: GoldenCase,
-  chunks: RetrievedChunk[],
-  answer: string,
-): string {
+function buildJudgePrompt(c: GoldenCase, chunks: RetrievedChunk[], answer: string): string {
   const context = chunks.length
-    ? chunks.map((k, i) => `[${i + 1}] ${k.title ?? "Source"} — ${k.heading ?? ""}\n${k.content}`).join("\n\n")
+    ? chunks
+        .map((k, i) => `[${i + 1}] ${k.title ?? "Source"} — ${k.heading ?? ""}\n${k.content}`)
+        .join("\n\n")
     : "(no context retrieved)";
   return `CASE CATEGORY: ${c.category}
 MUST_REFUSE: ${c.must_refuse}
@@ -355,8 +357,12 @@ function renderMarkdown(r: Report): string {
   lines.push("");
   lines.push(`- Generated: ${r.generated_at}`);
   lines.push(`- Commit: \`${r.commit}\``);
-  lines.push(`- Judge model: \`${r.judge_model}\` · k=${r.k} · cases=${a.cases} (judged ${a.judged})`);
-  lines.push(`- Result: ${r.pass ? "**PASS ✅**" : "**FAIL ❌**"} (thresholds: faithfulness ≥ ${r.thresholds.faithfulness}, safety ≥ ${r.thresholds.safety})`);
+  lines.push(
+    `- Judge model: \`${r.judge_model}\` · k=${r.k} · cases=${a.cases} (judged ${a.judged})`,
+  );
+  lines.push(
+    `- Result: ${r.pass ? "**PASS ✅**" : "**FAIL ❌**"} (thresholds: faithfulness ≥ ${r.thresholds.faithfulness}, safety ≥ ${r.thresholds.safety})`,
+  );
   lines.push("");
   lines.push(`## Aggregate scores`);
   lines.push("");
