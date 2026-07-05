@@ -1,0 +1,163 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useState } from "react";
+
+interface Metrics {
+  days: number;
+  totals: { requests: number; tokens: number; costUsd: number };
+  latency: { p50: number; p95: number };
+  byDay: { date: string; requests: number; tokens: number; costUsd: number }[];
+  tools: { stage: string; count: number }[];
+  retrieval: { searches: number; hits: number; hitRate: number };
+}
+
+function Card({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="rounded-xl border border-stone-200 p-4 dark:border-stone-800">
+      <div className="text-xs uppercase tracking-wider text-stone-500 dark:text-stone-400">
+        {label}
+      </div>
+      <div className="mt-1 text-2xl font-bold tabular-nums">{value}</div>
+      {sub ? <div className="text-xs text-stone-500">{sub}</div> : null}
+    </div>
+  );
+}
+
+function BarChart({ data, label }: { data: { label: string; value: number }[]; label: string }) {
+  const max = Math.max(1, ...data.map((d) => d.value));
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-semibold">{label}</h3>
+      {data.length === 0 ? (
+        <p className="text-xs text-stone-500">No data yet.</p>
+      ) : (
+        <ul className="space-y-1">
+          {data.map((d) => (
+            <li key={d.label} className="flex items-center gap-2 text-xs">
+              <span className="w-20 shrink-0 text-stone-500">{d.label}</span>
+              <span
+                className="h-4 rounded bg-emerald-500/80"
+                style={{ width: `${(d.value / max) * 100}%`, minWidth: d.value ? "2px" : "0" }}
+                role="img"
+                aria-label={`${d.label}: ${d.value}`}
+              />
+              <span className="tabular-nums text-stone-600 dark:text-stone-300">{d.value}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export default function MetricsDashboard() {
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/metrics")
+      .then(async (res) => {
+        if (!res.ok) throw new Error((await res.json()).error ?? `HTTP ${res.status}`);
+        return (await res.json()) as Metrics;
+      })
+      .then(setMetrics)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "failed"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <main className="mx-auto max-w-4xl px-6 py-10">
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Metrics</h1>
+          <p className="text-sm text-stone-500 dark:text-stone-400">
+            Live usage from the `traces` table (last {metrics?.days ?? 14} days).
+          </p>
+        </div>
+        <Link
+          href="/app"
+          className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+        >
+          ← Back to chat
+        </Link>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-stone-500">Loading…</p>
+      ) : error ? (
+        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+      ) : metrics ? (
+        <div className="space-y-8">
+          <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Card label="Requests" value={String(metrics.totals.requests)} />
+            <Card label="Tokens" value={metrics.totals.tokens.toLocaleString()} />
+            <Card label="Est. cost" value={`$${metrics.totals.costUsd.toFixed(4)}`} />
+            <Card
+              label="Latency"
+              value={`${(metrics.latency.p50 / 1000).toFixed(1)}s`}
+              sub={`p95 ${(metrics.latency.p95 / 1000).toFixed(1)}s`}
+            />
+          </section>
+
+          <section className="grid gap-8 sm:grid-cols-2">
+            <BarChart
+              label="Requests per day"
+              data={metrics.byDay.map((d) => ({ label: d.date.slice(5), value: d.requests }))}
+            />
+            <BarChart
+              label="Tokens per day"
+              data={metrics.byDay.map((d) => ({ label: d.date.slice(5), value: d.tokens }))}
+            />
+            <BarChart
+              label="Tool usage"
+              data={metrics.tools.map((t) => ({ label: t.stage, value: t.count }))}
+            />
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Retrieval hit-rate</h3>
+              <div className="text-3xl font-bold">
+                {(metrics.retrieval.hitRate * 100).toFixed(0)}%
+              </div>
+              <p className="text-xs text-stone-500">
+                {metrics.retrieval.hits}/{metrics.retrieval.searches} knowledge searches returned
+                context
+              </p>
+            </div>
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-sm font-semibold">Cost per day</h3>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-stone-500">
+                  <th className="py-1">Date</th>
+                  <th>Requests</th>
+                  <th>Tokens</th>
+                  <th>Est. cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metrics.byDay.map((d) => (
+                  <tr key={d.date} className="border-t border-stone-200 dark:border-stone-800">
+                    <td className="py-1">{d.date}</td>
+                    <td className="tabular-nums">{d.requests}</td>
+                    <td className="tabular-nums">{d.tokens.toLocaleString()}</td>
+                    <td className="tabular-nums">${d.costUsd.toFixed(5)}</td>
+                  </tr>
+                ))}
+                {metrics.byDay.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="py-2 text-stone-500">
+                      No requests recorded yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+        </div>
+      ) : null}
+    </main>
+  );
+}
