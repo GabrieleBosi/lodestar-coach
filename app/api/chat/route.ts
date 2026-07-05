@@ -3,29 +3,20 @@ import { randomUUID } from "node:crypto";
 import { type Content } from "@google/genai";
 import { NextResponse } from "next/server";
 
+import { createSupabaseAdminClient } from "@/lib/db/admin";
 import { createSupabaseServerClient } from "@/lib/db/supabase";
-import type { Json } from "@/lib/db/types";
-import { extractAndStoreMemories, getPersonalizationContext } from "@/lib/agent/memory";
-import { runAgent } from "@/lib/agent/loop";
+import { streamTurn } from "@/lib/agent/chat";
+import { isRateLimited } from "@/lib/agent/ratelimit";
 import { getLLMProvider } from "@/lib/llm";
-import { estimateCostUsd } from "@/lib/llm/cost";
-import { AGENT_SYSTEM_PROMPT } from "@/lib/rag/prompt";
+import { CachingProvider } from "@/lib/llm/cache";
+import { readGeminiConfig } from "@/lib/llm/gemini";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const HISTORY_LIMIT = 10;
-
-function chunkText(text: string, size = 24): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
-  return out;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
+const RATE_LIMIT_PER_MIN = Number(process.env.CHAT_RATE_LIMIT_PER_MIN ?? 20);
 
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
@@ -34,6 +25,20 @@ export async function POST(request: Request) {
   } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (
+    await isRateLimited(supabase, {
+      stage: "chat.request",
+      windowSeconds: 60,
+      max: RATE_LIMIT_PER_MIN,
+      userId: user.id,
+    })
+  ) {
+    return NextResponse.json(
+      { error: "You're sending messages too quickly. Please wait a moment and try again." },
+      { status: 429 },
+    );
   }
 
   let body: { message?: unknown; conversationId?: unknown };
@@ -60,7 +65,6 @@ export async function POST(request: Request) {
     convoId = data.id;
   }
 
-  // Load prior turns as Gemini contents BEFORE inserting the new user message.
   const { data: prior } = await supabase
     .from("messages")
     .select("role, content")
@@ -82,92 +86,23 @@ export async function POST(request: Request) {
   });
   if (userMsgErr) return NextResponse.json({ error: userMsgErr.message }, { status: 500 });
 
-  const provider = getLLMProvider();
-  const requestId = randomUUID();
+  // Wrap the provider with the shared cache (cuts embedding cost on repeats).
+  const cfg = readGeminiConfig();
+  const provider = new CachingProvider(
+    getLLMProvider(),
+    createSupabaseAdminClient(),
+    cfg.embedModel,
+  );
 
-  let personalization = "";
-  try {
-    personalization = await getPersonalizationContext(
-      { supabase, provider, userId: user.id },
-      message,
-    );
-  } catch {
-    personalization = "";
-  }
-
-  const system = personalization
-    ? `${AGENT_SYSTEM_PROMPT}\n\nPERSONALIZATION CONTEXT (about this user):\n${personalization}`
-    : AGENT_SYSTEM_PROMPT;
-
-  const started = Date.now();
-  let agent;
-  try {
-    agent = await runAgent({
-      ctx: { supabase, provider, userId: user.id, requestId, citations: [] },
-      system,
-      history,
-      userMessage: message,
-    });
-  } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Agent failed" },
-      { status: 500 },
-    );
-  }
-
-  const meta = {
+  return streamTurn({
+    supabase,
+    provider,
+    userId: user.id,
+    requestId: randomUUID(),
     conversationId: convoId,
-    sources: agent.citations,
-    actions: agent.actions.map((a) => ({
-      name: a.name,
-      ok: a.ok,
-      summary: a.summary,
-      error: a.error,
-    })),
-  };
-
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      controller.enqueue(encoder.encode(JSON.stringify(meta) + "\n"));
-
-      for (const piece of chunkText(agent.finalText)) {
-        controller.enqueue(encoder.encode(piece));
-        await sleep(8);
-      }
-
-      await supabase.from("messages").insert({
-        conversation_id: convoId,
-        role: "assistant",
-        content: agent.finalText,
-        citations: agent.citations as unknown as Json,
-        tool_calls: agent.actions as unknown as Json,
-        tokens_in: agent.tokensIn,
-        tokens_out: agent.tokensOut,
-        latency_ms: Date.now() - started,
-        cost_usd: estimateCostUsd(agent.tokensIn, agent.tokensOut),
-      });
-      await supabase
-        .from("conversations")
-        .update({ updated_at: new Date().toISOString() })
-        .eq("id", convoId);
-
-      // Best-effort long-term memory extraction (never blocks the answer).
-      await extractAndStoreMemories(
-        { supabase, provider, userId: user.id },
-        message,
-        agent.finalText,
-      );
-
-      controller.close();
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-store",
-      "x-conversation-id": convoId,
-    },
+    message,
+    history,
+    extractMemory: true,
+    stage: "chat.request",
   });
 }
