@@ -1,0 +1,98 @@
+name: Eval
+
+on:
+  pull_request:
+    branches: [main]
+
+# Allow the workflow to comment on the PR.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      # Runs the golden-set eval (retrieval + LLM judge), writes evals/report.*,
+      # and persists the aggregate to eval_runs. Requires repo secrets:
+      #   GEMINI_API_KEY, NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      #   SUPABASE_SERVICE_ROLE_KEY. Optional var: EVAL_JUDGE_MODEL.
+      # continue-on-error so we still post a comment and then gate explicitly.
+      - name: Run evaluation
+        id: eval
+        continue-on-error: true
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_CHAT_MODEL: gemini-3.5-flash
+          GEMINI_EMBED_MODEL: gemini-embedding-2
+          EMBED_DIM: "1536"
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
+        run: npm run eval
+
+      - name: Comment scores on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const read = (p) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } };
+            const report = read("evals/report.json");
+            const baseline = read("evals/baseline.json");
+            const marker = "<!-- lodestar-eval -->";
+
+            let body;
+            if (!report) {
+              body = `${marker}\n### 🧪 Lodestar eval\n\n⚠️ The evaluation did not produce a report. Check the **Run evaluation** step — repo secrets (\`GEMINI_API_KEY\`, Supabase keys) may be missing. This check is **failing**.`;
+            } else {
+              const a = report.aggregate;
+              const b = baseline && baseline.aggregate ? baseline.aggregate : null;
+              const t = report.thresholds;
+              const row = (label, key, thr) => {
+                const cur = a[key];
+                const base = b ? b[key] : null;
+                const delta = base == null ? "" : ` (${cur - base >= 0 ? "+" : ""}${(cur - base).toFixed(3)})`;
+                const flag = thr != null ? (cur >= thr ? "✅" : "❌") : "";
+                return `| ${label} | ${cur}${delta} | ${base == null ? "—" : base} | ${thr ?? "—"} | ${flag} |`;
+              };
+              body = [
+                marker,
+                `### 🧪 Lodestar eval — ${report.pass ? "**PASS ✅**" : "**FAIL ❌**"}`,
+                "",
+                `judge: \`${report.judge_model}\` · cases: ${a.cases} · commit: \`${String(report.commit).slice(0, 7)}\``,
+                "",
+                `| Metric | This PR | main (baseline) | Threshold | Gate |`,
+                `| --- | --- | --- | --- | --- |`,
+                row("Faithfulness", "faithfulness", t.faithfulness),
+                row("Safety / refusal", "safety", t.safety),
+                row("Answer relevance", "relevance", null),
+                row("Citation correctness", "citation", null),
+                row("Retrieval hit@k", "hit_at_k", null),
+                row("Retrieval MRR", "mrr", null),
+              ].join("\n");
+            }
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Enforce thresholds
+        run: |
+          node -e "let r; try { r = require('./evals/report.json'); } catch { console.error('No eval report produced — failing.'); process.exit(1); } if (!r.pass) { console.error('Eval gate FAILED', JSON.stringify(r.aggregate)); process.exit(1); } console.log('Eval gate passed', JSON.stringify(r.aggregate));"
