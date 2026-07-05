@@ -197,15 +197,21 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
           <h1 className="text-xl font-bold tracking-tight">Lodestar</h1>
           <p className="text-xs text-stone-500 dark:text-stone-400">{userEmail}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <nav className="flex flex-wrap items-center justify-end gap-1.5">
+          <Link
+            href="/profile"
+            className="rounded-lg border border-stone-300 px-2.5 py-1.5 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+          >
+            Profile
+          </Link>
           <Link
             href="/memories"
-            className="rounded-lg border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+            className="rounded-lg border border-stone-300 px-2.5 py-1.5 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
           >
-            What I remember
+            Memory
           </Link>
           <SignOutButton />
-        </div>
+        </nav>
       </header>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 py-4 md:grid-cols-[200px_1fr_260px]">
