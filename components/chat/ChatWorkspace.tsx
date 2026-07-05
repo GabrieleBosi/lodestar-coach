@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import SignOutButton from "@/components/SignOutButton";
@@ -12,11 +13,19 @@ interface Citation {
   heading: string | null;
 }
 
+interface AgentAction {
+  name: string;
+  ok?: boolean;
+  summary?: string;
+  error?: string;
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   citations?: Citation[];
+  actions?: AgentAction[];
 }
 
 interface ConversationSummary {
@@ -64,7 +73,13 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
     const res = await fetch(`/api/conversations?id=${id}`);
     if (!res.ok) return;
     const data = (await res.json()) as {
-      messages: { id: string; role: string; content: string | null; citations: unknown }[];
+      messages: {
+        id: string;
+        role: string;
+        content: string | null;
+        citations: unknown;
+        tool_calls: unknown;
+      }[];
     };
     setMessages(
       data.messages.map((m) => ({
@@ -72,6 +87,7 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
         role: m.role === "assistant" ? "assistant" : "user",
         content: m.content ?? "",
         citations: Array.isArray(m.citations) ? (m.citations as Citation[]) : undefined,
+        actions: Array.isArray(m.tool_calls) ? (m.tool_calls as AgentAction[]) : undefined,
       })),
     );
   }
@@ -128,11 +144,18 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
               const meta = JSON.parse(metaLine) as {
                 conversationId: string;
                 sources: Citation[];
+                actions?: AgentAction[];
               };
               setConversationId(meta.conversationId);
               setMessages((prev) => [
                 ...prev,
-                { id: assistantId, role: "assistant", content: "", citations: meta.sources },
+                {
+                  id: assistantId,
+                  role: "assistant",
+                  content: "",
+                  citations: meta.sources,
+                  actions: meta.actions,
+                },
               ]);
               assistantAdded = true;
             } catch {
@@ -174,7 +197,15 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
           <h1 className="text-xl font-bold tracking-tight">Lodestar</h1>
           <p className="text-xs text-stone-500 dark:text-stone-400">{userEmail}</p>
         </div>
-        <SignOutButton />
+        <div className="flex items-center gap-2">
+          <Link
+            href="/memories"
+            className="rounded-lg border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+          >
+            What I remember
+          </Link>
+          <SignOutButton />
+        </div>
       </header>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 py-4 md:grid-cols-[200px_1fr_260px]">
@@ -216,12 +247,30 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
             {messages.map((m) => (
               <div
                 key={m.id}
-                className={m.role === "user" ? "flex justify-end" : "flex justify-start"}
+                className={m.role === "user" ? "flex justify-end" : "flex flex-col items-start"}
               >
+                {m.role === "assistant" && m.actions && m.actions.length > 0 && (
+                  <div className="mb-1 flex flex-wrap gap-1">
+                    {m.actions.map((a, i) => (
+                      <span
+                        key={i}
+                        title={a.error ?? a.summary ?? a.name}
+                        className={`rounded-full border px-2 py-0.5 text-[11px] ${
+                          a.ok === false
+                            ? "border-red-300 text-red-600 dark:border-red-900 dark:text-red-400"
+                            : "border-stone-300 text-stone-500 dark:border-stone-700 dark:text-stone-400"
+                        }`}
+                      >
+                        {a.ok === false ? "⚠ " : "⚙ "}
+                        {a.summary ?? a.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <div
                   className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2 text-sm ${
                     m.role === "user"
-                      ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
+                      ? "self-end bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
                       : "bg-stone-100 text-stone-900 dark:bg-stone-800 dark:text-stone-100"
                   }`}
                 >
