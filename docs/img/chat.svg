@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <rect width="1200" height="760" fill="#e7e5e4"/>
+  <rect x="40" y="30" width="1120" height="700" rx="14" fill="#fafaf9" stroke="#d6d3d1"/>
+  <rect x="40" y="30" width="1120" height="46" rx="14" fill="#f5f5f4"/>
+  <rect x="40" y="60" width="1120" height="16" fill="#f5f5f4"/>
+  <circle cx="66" cy="53" r="6" fill="#ef4444"/><circle cx="86" cy="53" r="6" fill="#f59e0b"/><circle cx="106" cy="53" r="6" fill="#22c55e"/>
+  <rect x="150" y="41" width="620" height="24" rx="12" fill="#e7e5e4"/>
+  <text x="168" y="58" font-size="13" fill="#78716c">lodestar-coach.netlify.app/app</text>
+
+  <!-- header -->
+  <text x="70" y="112" font-size="20" font-weight="700" fill="#1c1917">Lodestar</text>
+  <text x="70" y="130" font-size="12" fill="#78716c">you@example.com</text>
+  <rect x="900" y="98" width="80" height="30" rx="8" fill="#fafaf9" stroke="#d6d3d1"/><text x="918" y="118" font-size="12" fill="#1c1917">Profile</text>
+  <rect x="990" y="98" width="82" height="30" rx="8" fill="#fafaf9" stroke="#d6d3d1"/><text x="1006" y="118" font-size="12" fill="#1c1917">Memory</text>
+  <rect x="1082" y="98" width="66" height="30" rx="8" fill="#fafaf9" stroke="#d6d3d1"/><text x="1096" y="118" font-size="12" fill="#1c1917">Sign out</text>
+  <line x1="70" y1="148" x2="1130" y2="148" stroke="#e7e5e4"/>
+
+  <!-- sidebar -->
+  <rect x="70" y="170" width="180" height="34" rx="8" fill="#fafaf9" stroke="#d6d3d1"/><text x="92" y="192" font-size="13" fill="#1c1917">+ New chat</text>
+  <rect x="70" y="214" width="180" height="30" rx="6" fill="#f5f5f4"/><text x="82" y="234" font-size="12.5" fill="#44403c">Deload &amp; lean-bulk plan</text>
+  <text x="82" y="266" font-size="12.5" fill="#78716c">Protein targets</text>
+
+  <!-- transcript -->
+  <!-- user bubble -->
+  <rect x="612" y="170" width="286" height="34" rx="16" fill="#1c1917"/>
+  <text x="632" y="192" font-size="13" fill="#ffffff">How should I structure a deload week?</text>
+
+  <!-- actions chips -->
+  <rect x="288" y="222" width="250" height="22" rx="11" fill="#fafaf9" stroke="#d6d3d1"/>
+  <text x="300" y="237" font-size="11" fill="#78716c">⚙ search_knowledge → 6 chunks</text>
+
+  <!-- assistant bubble -->
+  <rect x="288" y="252" width="560" height="196" rx="16" fill="#f5f5f4"/>
+  <text x="308" y="282" font-size="13.5" fill="#1c1917">A deload typically lasts about one week and reduces</text>
+  <text x="308" y="304" font-size="13.5" fill="#1c1917">training stress while keeping movement patterns sharp <tspan fill="#059669" font-weight="700">[1]</tspan>:</text>
+  <text x="308" y="330" font-size="13.5" fill="#1c1917">• Reduce volume — cut working sets ~50% at moderate load <tspan fill="#059669" font-weight="700">[1]</tspan></text>
+  <text x="308" y="352" font-size="13.5" fill="#1c1917">• Reduce intensity — keep sets, drop load to ~60–70% <tspan fill="#059669" font-weight="700">[1]</tspan></text>
+  <text x="308" y="378" font-size="13.5" fill="#1c1917">Many intermediate lifters deload every 4–8 weeks, or when</text>
+  <text x="308" y="400" font-size="13.5" fill="#1c1917">performance, sleep, or joints signal accumulated fatigue <tspan fill="#059669" font-weight="700">[3]</tspan>.</text>
+  <text x="308" y="428" font-size="12" fill="#78716c">General information, not medical advice.</text>
+
+  <!-- composer -->
+  <rect x="288" y="656" width="470" height="40" rx="10" fill="#ffffff" stroke="#d6d3d1"/>
+  <text x="304" y="681" font-size="13" fill="#a8a29e">Ask about training, nutrition, or recovery…</text>
+  <rect x="766" y="656" width="82" height="40" rx="10" fill="#1c1917"/><text x="792" y="681" font-size="13" font-weight="600" fill="#ffffff">Send</text>
+
+  <!-- sources panel -->
+  <rect x="882" y="170" width="248" height="526" rx="12" fill="#ffffff" stroke="#e7e5e4"/>
+  <text x="902" y="198" font-size="11" letter-spacing="1" fill="#78716c">SOURCES</text>
+  <text x="902" y="232" font-size="12.5" font-weight="700" fill="#1c1917">[1] Periodization and Deloads</text>
+  <text x="902" y="250" font-size="11.5" fill="#78716c">How to structure a deload week</text>
+  <text x="902" y="268" font-size="11.5" fill="#059669">en.wikipedia.org/wiki/Sports…</text>
+  <text x="902" y="304" font-size="12.5" font-weight="700" fill="#1c1917">[2] Periodization and Deloads</text>
+  <text x="902" y="322" font-size="11.5" fill="#78716c">Why deload</text>
+  <text x="902" y="358" font-size="12.5" font-weight="700" fill="#1c1917">[3] Progressive Overload</text>
+  <text x="902" y="376" font-size="11.5" fill="#78716c">How fast to progress</text>
+</svg>
