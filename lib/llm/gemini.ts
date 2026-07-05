@@ -22,6 +22,19 @@ export interface GeminiConfig {
   chatModel: string;
   embedModel: string;
   embedDim: number;
+  /** Optional API base URL. Set GEMINI_BASE_URL to pin the direct Google endpoint
+   *  and bypass any hosting-provider AI gateway that lacks the embedding model. */
+  baseUrl?: string;
+}
+
+/** GoogleGenAI options, adding an explicit baseUrl when configured. */
+export function geminiClientOptions(config: GeminiConfig): {
+  apiKey: string;
+  httpOptions?: { baseUrl: string };
+} {
+  return config.baseUrl
+    ? { apiKey: config.apiKey, httpOptions: { baseUrl: config.baseUrl } }
+    : { apiKey: config.apiKey };
 }
 
 /** Read Gemini configuration from the environment. Throws if no API key. */
@@ -38,6 +51,7 @@ export function readGeminiConfig(): GeminiConfig {
     chatModel: process.env.GEMINI_CHAT_MODEL ?? DEFAULTS.chatModel,
     embedModel: process.env.GEMINI_EMBED_MODEL ?? DEFAULTS.embedModel,
     embedDim: Number.isFinite(embedDim) ? embedDim : DEFAULTS.embedDim,
+    baseUrl: process.env.GEMINI_BASE_URL || undefined,
   };
 }
 
@@ -47,7 +61,7 @@ export class GeminiProvider implements LLMProvider {
 
   constructor(config: GeminiConfig) {
     this.config = config;
-    this.client = new GoogleGenAI({ apiKey: config.apiKey });
+    this.client = new GoogleGenAI(geminiClientOptions(config));
   }
 
   async generate(prompt: string, opts: GenerateOptions = {}): Promise<string> {

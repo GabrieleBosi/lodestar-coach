@@ -11,7 +11,7 @@ import { type Content, type FunctionCall, GoogleGenAI } from "@google/genai";
 
 import type { Json } from "../db/types";
 import { estimateCostUsd, estimateTokens } from "../llm/cost";
-import { readGeminiConfig } from "../llm/gemini";
+import { geminiClientOptions, readGeminiConfig } from "../llm/gemini";
 import type { Citation } from "../rag/prompt";
 import { AGENT_TOOLS, type ToolContext } from "./tools";
 
@@ -170,7 +170,7 @@ export async function runAgent(params: {
 }): Promise<AgentResult> {
   const { ctx, system, history, userMessage } = params;
   const cfg = readGeminiConfig();
-  const ai = new GoogleGenAI({ apiKey: cfg.apiKey });
+  const ai = new GoogleGenAI(geminiClientOptions(cfg));
 
   const tools = [
     {
