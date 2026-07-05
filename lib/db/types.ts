@@ -143,6 +143,33 @@ export type Database = {
         };
         Relationships: [];
       };
+      llm_cache: {
+        Row: {
+          created_at: string;
+          hits: number;
+          key: string;
+          kind: string;
+          model: string | null;
+          value: Json;
+        };
+        Insert: {
+          created_at?: string;
+          hits?: number;
+          key: string;
+          kind: string;
+          model?: string | null;
+          value: Json;
+        };
+        Update: {
+          created_at?: string;
+          hits?: number;
+          key?: string;
+          kind?: string;
+          model?: string | null;
+          value?: Json;
+        };
+        Relationships: [];
+      };
       memories: {
         Row: {
           content: string;
