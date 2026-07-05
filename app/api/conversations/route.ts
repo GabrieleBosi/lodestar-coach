@@ -22,7 +22,7 @@ export async function GET(request: Request) {
   if (id) {
     const { data, error } = await supabase
       .from("messages")
-      .select("id, role, content, citations, created_at")
+      .select("id, role, content, citations, tool_calls, created_at")
       .eq("conversation_id", id)
       .order("created_at", { ascending: true });
     if (error) {

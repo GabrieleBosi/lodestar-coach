@@ -1,19 +1,32 @@
+import { randomUUID } from "node:crypto";
+
+import { type Content } from "@google/genai";
 import { NextResponse } from "next/server";
 
 import { createSupabaseServerClient } from "@/lib/db/supabase";
 import type { Json } from "@/lib/db/types";
-import { estimateCostUsd, estimateTokens } from "@/lib/llm/cost";
+import { extractAndStoreMemories, getPersonalizationContext } from "@/lib/agent/memory";
+import { runAgent } from "@/lib/agent/loop";
 import { getLLMProvider } from "@/lib/llm";
-import { buildGroundedPrompt } from "@/lib/rag/prompt";
-import { retrieve } from "@/lib/rag/retrieve";
+import { estimateCostUsd } from "@/lib/llm/cost";
+import { AGENT_SYSTEM_PROMPT } from "@/lib/rag/prompt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Streamed grounded RAG chat.
-// Response body: one JSON meta line (conversationId + sources) terminated by
-// "\n", then the assistant's answer streamed as plain text.
+const HISTORY_LIMIT = 10;
+
+function chunkText(text: string, size = 24): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
+  return out;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
   const {
@@ -36,7 +49,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "message is required" }, { status: 400 });
   }
 
-  // Ensure a conversation (RLS ties it to the current user).
   let convoId = conversationId;
   if (!convoId) {
     const { data, error } = await supabase
@@ -44,80 +56,108 @@ export async function POST(request: Request) {
       .insert({ user_id: user.id, title: message.slice(0, 60) })
       .select("id")
       .single();
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     convoId = data.id;
   }
 
-  // Persist the user turn.
+  // Load prior turns as Gemini contents BEFORE inserting the new user message.
+  const { data: prior } = await supabase
+    .from("messages")
+    .select("role, content")
+    .eq("conversation_id", convoId)
+    .order("created_at", { ascending: true })
+    .limit(HISTORY_LIMIT);
+
+  const history: Content[] = (prior ?? [])
+    .filter((m) => (m.content ?? "").trim().length > 0)
+    .map((m) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content ?? "" }],
+    }));
+
   const { error: userMsgErr } = await supabase.from("messages").insert({
     conversation_id: convoId,
     role: "user",
     content: message,
   });
-  if (userMsgErr) {
-    return NextResponse.json({ error: userMsgErr.message }, { status: 500 });
-  }
+  if (userMsgErr) return NextResponse.json({ error: userMsgErr.message }, { status: 500 });
 
   const provider = getLLMProvider();
+  const requestId = randomUUID();
 
-  let citations;
-  let system: string;
-  let userPrompt: string;
+  let personalization = "";
   try {
-    const chunks = await retrieve(supabase, provider, message, 6);
-    const grounded = buildGroundedPrompt(message, chunks);
-    citations = grounded.citations;
-    system = grounded.system;
-    userPrompt = grounded.user;
+    personalization = await getPersonalizationContext(
+      { supabase, provider, userId: user.id },
+      message,
+    );
+  } catch {
+    personalization = "";
+  }
+
+  const system = personalization
+    ? `${AGENT_SYSTEM_PROMPT}\n\nPERSONALIZATION CONTEXT (about this user):\n${personalization}`
+    : AGENT_SYSTEM_PROMPT;
+
+  const started = Date.now();
+  let agent;
+  try {
+    agent = await runAgent({
+      ctx: { supabase, provider, userId: user.id, requestId, citations: [] },
+      system,
+      history,
+      userMessage: message,
+    });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Retrieval failed" },
+      { error: err instanceof Error ? err.message : "Agent failed" },
       { status: 500 },
     );
   }
 
-  const meta = { conversationId: convoId, sources: citations };
-  const encoder = new TextEncoder();
-  const started = Date.now();
+  const meta = {
+    conversationId: convoId,
+    sources: agent.citations,
+    actions: agent.actions.map((a) => ({
+      name: a.name,
+      ok: a.ok,
+      summary: a.summary,
+      error: a.error,
+    })),
+  };
 
+  const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       controller.enqueue(encoder.encode(JSON.stringify(meta) + "\n"));
 
-      let answer = "";
-      try {
-        for await (const piece of provider.generateStream(userPrompt, {
-          system,
-          temperature: 0.3,
-        })) {
-          answer += piece;
-          controller.enqueue(encoder.encode(piece));
-        }
-      } catch {
-        const note = "\n\n[The response was interrupted. Please try again.]";
-        answer += note;
-        controller.enqueue(encoder.encode(note));
+      for (const piece of chunkText(agent.finalText)) {
+        controller.enqueue(encoder.encode(piece));
+        await sleep(8);
       }
 
-      // Persist the assistant turn with observability metadata.
-      const tokensIn = estimateTokens(`${system}\n${userPrompt}`);
-      const tokensOut = estimateTokens(answer);
       await supabase.from("messages").insert({
         conversation_id: convoId,
         role: "assistant",
-        content: answer,
-        citations: citations as unknown as Json,
-        tokens_in: tokensIn,
-        tokens_out: tokensOut,
+        content: agent.finalText,
+        citations: agent.citations as unknown as Json,
+        tool_calls: agent.actions as unknown as Json,
+        tokens_in: agent.tokensIn,
+        tokens_out: agent.tokensOut,
         latency_ms: Date.now() - started,
-        cost_usd: estimateCostUsd(tokensIn, tokensOut),
+        cost_usd: estimateCostUsd(agent.tokensIn, agent.tokensOut),
       });
       await supabase
         .from("conversations")
         .update({ updated_at: new Date().toISOString() })
         .eq("id", convoId);
+
+      // Best-effort long-term memory extraction (never blocks the answer).
+      await extractAndStoreMemories(
+        { supabase, provider, userId: user.id },
+        message,
+        agent.finalText,
+      );
 
       controller.close();
     },
