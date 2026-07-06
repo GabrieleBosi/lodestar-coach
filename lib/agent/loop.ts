@@ -36,6 +36,7 @@ export interface AgentResult {
   tokensIn: number;
   tokensOut: number;
   degraded: boolean;
+  degradedError?: string;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -186,6 +187,7 @@ export async function runAgent(params: {
   const actions: AgentAction[] = [];
   let finalText = "";
   let degraded = false;
+  let degradedError: string | undefined;
   let tokensIn = 0;
   let tokensOut = 0;
 
@@ -229,11 +231,20 @@ export async function runAgent(params: {
       tokensOut += result.tokensOut;
       finalText = result.text || DEGRADED_MESSAGE;
     }
-  } catch {
+  } catch (err) {
     // Model stayed unavailable — degrade gracefully rather than error out.
     degraded = true;
+    degradedError = err instanceof Error ? err.message : String(err);
     finalText = DEGRADED_MESSAGE;
   }
 
-  return { finalText, actions, citations: ctx.citations, tokensIn, tokensOut, degraded };
+  return {
+    finalText,
+    actions,
+    citations: ctx.citations,
+    tokensIn,
+    tokensOut,
+    degraded,
+    degradedError,
+  };
 }

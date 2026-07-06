@@ -68,7 +68,11 @@ export async function streamTurn(params: TurnParams): Promise<Response> {
     tokens: agent.tokensIn + agent.tokensOut,
     latency_ms: latencyMs,
     cost_usd: estimateCostUsd(agent.tokensIn, agent.tokensOut),
-    payload: { actions: agent.actions.length, degraded: agent.degraded } as unknown as Json,
+    payload: {
+      actions: agent.actions.length,
+      degraded: agent.degraded,
+      degradedError: agent.degradedError ?? null,
+    } as unknown as Json,
   });
 
   const meta = {
