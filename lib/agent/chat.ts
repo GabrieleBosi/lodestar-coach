@@ -8,44 +8,11 @@ import { type Content } from "@google/genai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database, Json } from "../db/types";
-import { estimateCostUsd, estimateTokens } from "../llm/cost";
+import { estimateCostUsd } from "../llm/cost";
 import type { LLMProvider } from "../llm/types";
-import { AGENT_SYSTEM_PROMPT, buildGroundedPrompt } from "../rag/prompt";
-import { retrieve } from "../rag/retrieve";
-import { runAgent, type AgentResult } from "./loop";
+import { AGENT_SYSTEM_PROMPT } from "../rag/prompt";
+import { runAgent } from "./loop";
 import { extractAndStoreMemories, getPersonalizationContext } from "./memory";
-
-/**
- * Requests that need a tool (writing a log, reading history, computing targets).
- * Everything else is plain grounded Q&A and can skip the tool-selection round
- * trip, which roughly halves the turn: attaching tools costs ~20s per model call
- * on the current Gemini flash models, and two sequential calls exceed the
- * ~30s hosting request budget.
- */
-const ACTION_INTENT =
-  /\b(log|logged|logging|record|track|ate|eaten|did|history|trend|trending|progress|since|last week|calorie|calories|macro|macros|tdee|maintenance|deficit|surplus|bulk|cut|how much should i eat)\b/i;
-
-function needsTools(message: string): boolean {
-  return ACTION_INTENT.test(message);
-}
-
-/** Gemini flash latency is highly variable (measured 11s–30s+ for one call) and
- *  the hosting request budget is ~30s, so every model call needs a ceiling that
- *  leaves room to still send a graceful answer. */
-const GENERATE_TIMEOUT_MS = 18_000;
-const GROUNDED_CHUNKS = 6;
-// Gemini 3.x counts internal "thinking" tokens against maxOutputTokens (measured
-// ~430-500 per call) and thinking cannot be disabled — thinkingConfig is
-// rejected with a 400. The cap must clear that floor or the visible answer is
-// truncated mid-sentence with finishReason=MAX_TOKENS.
-const GROUNDED_MAX_TOKENS = 2000;
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("model timeout")), ms)),
-  ]);
-}
 
 function chunkText(text: string, size = 24): string[] {
   const out: string[] = [];
@@ -62,6 +29,8 @@ export interface TurnParams {
   message: string;
   history: Content[];
   extractMemory?: boolean;
+  /** When true, update_profile refuses writes (the public demo's shared user). */
+  profileReadOnly?: boolean;
   /** trace stage for the request-level row (e.g. "chat.request" | "demo.request"). */
   stage?: string;
 }
@@ -69,85 +38,6 @@ export interface TurnParams {
 /** Control byte separating keepalives and the trailing metadata from answer text. */
 const CTRL = "\u0000";
 const KEEPALIVE_MS = 5_000;
-
-/**
- * Single-call grounded answer: retrieve, inject the numbered context, generate.
- * Produces the same `AgentResult` shape as the agent loop (including a synthetic
- * `search_knowledge` action) so the UI and persistence are unchanged.
- */
-async function groundedAnswer(args: {
-  supabase: SupabaseClient<Database>;
-  provider: LLMProvider;
-  userId: string;
-  requestId: string;
-  system: string;
-  message: string;
-}): Promise<AgentResult> {
-  const { supabase, provider, userId, requestId, system, message } = args;
-
-  const retrievalStarted = Date.now();
-  const chunks = await retrieve(supabase, provider, message, GROUNDED_CHUNKS);
-  const grounded = buildGroundedPrompt(message, chunks);
-  await supabase.from("traces").insert({
-    request_id: requestId,
-    user_id: userId,
-    stage: "search_knowledge",
-    latency_ms: Date.now() - retrievalStarted,
-    payload: {
-      summary: `search_knowledge("${message.slice(0, 60)}") → ${chunks.length} chunk(s)`,
-    } as unknown as Json,
-  });
-
-  const genStarted = Date.now();
-  let finalText = "";
-  let degraded = false;
-  let degradedError: string | undefined;
-  try {
-    finalText = await withTimeout(
-      provider.generate(grounded.user, {
-        system: `${system}\n\n${grounded.system}`,
-        temperature: 0.3,
-        maxOutputTokens: GROUNDED_MAX_TOKENS,
-      }),
-      GENERATE_TIMEOUT_MS,
-    );
-  } catch (err) {
-    degraded = true;
-    degradedError = err instanceof Error ? err.message.slice(0, 300) : String(err);
-    finalText =
-      "That took longer than expected to generate — the model is running slowly right now. " +
-      "Please try again in a moment. (This is general information, not medical advice.)";
-  }
-
-  const tokensIn = estimateTokens(system + grounded.user);
-  const tokensOut = estimateTokens(finalText);
-  await supabase.from("traces").insert({
-    request_id: requestId,
-    user_id: userId,
-    stage: "llm.chat",
-    tokens: tokensIn + tokensOut,
-    latency_ms: Date.now() - genStarted,
-    cost_usd: estimateCostUsd(tokensIn, tokensOut),
-    payload: { mode: "grounded" } as unknown as Json,
-  });
-
-  return {
-    finalText,
-    actions: [
-      {
-        name: "search_knowledge",
-        args: { query: message },
-        ok: true,
-        summary: `search_knowledge → ${chunks.length} chunk(s)`,
-      },
-    ],
-    citations: grounded.citations,
-    tokensIn,
-    tokensOut,
-    degraded,
-    degradedError,
-  };
-}
 
 export function streamTurn(params: TurnParams): Response {
   const { supabase, provider, userId, requestId, conversationId, message, history } = params;
@@ -189,14 +79,22 @@ export function streamTurn(params: TurnParams): Response {
           ? `${AGENT_SYSTEM_PROMPT}\n\nPERSONALIZATION CONTEXT (about this user):\n${personalization}`
           : AGENT_SYSTEM_PROMPT;
 
-        const agent = needsTools(message)
-          ? await runAgent({
-              ctx: { supabase, provider, userId, requestId, citations: [] },
-              system,
-              history,
-              userMessage: message,
-            })
-          : await groundedAnswer({ supabase, provider, userId, requestId, system, message });
+        // Always run the full agent: tool choice belongs to the model, not to a
+        // keyword heuristic. A regex fast-path here silently stripped the tools
+        // from paraphrased questions about the user's own data (issue #2, P0-1).
+        const agent = await runAgent({
+          ctx: {
+            supabase,
+            provider,
+            userId,
+            requestId,
+            citations: [],
+            profileReadOnly: params.profileReadOnly,
+          },
+          system,
+          history,
+          userMessage: message,
+        });
         const latencyMs = Date.now() - started;
         clearInterval(keepalive);
 
