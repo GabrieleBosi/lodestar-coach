@@ -29,6 +29,20 @@ function needsTools(message: string): boolean {
   return ACTION_INTENT.test(message);
 }
 
+/** Gemini flash latency is highly variable (measured 11s–30s+ for one call) and
+ *  the hosting request budget is ~30s, so every model call needs a ceiling that
+ *  leaves room to still send a graceful answer. */
+const GENERATE_TIMEOUT_MS = 18_000;
+const GROUNDED_CHUNKS = 4;
+const GROUNDED_MAX_TOKENS = 450;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("model timeout")), ms)),
+  ]);
+}
+
 function chunkText(text: string, size = 24): string[] {
   const out: string[] = [];
   for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
@@ -68,7 +82,7 @@ async function groundedAnswer(args: {
   const { supabase, provider, userId, requestId, system, message } = args;
 
   const retrievalStarted = Date.now();
-  const chunks = await retrieve(supabase, provider, message, 6);
+  const chunks = await retrieve(supabase, provider, message, GROUNDED_CHUNKS);
   const grounded = buildGroundedPrompt(message, chunks);
   await supabase.from("traces").insert({
     request_id: requestId,
@@ -85,17 +99,20 @@ async function groundedAnswer(args: {
   let degraded = false;
   let degradedError: string | undefined;
   try {
-    finalText = await provider.generate(grounded.user, {
-      system: `${system}\n\n${grounded.system}`,
-      temperature: 0.3,
-      maxOutputTokens: 700,
-    });
+    finalText = await withTimeout(
+      provider.generate(grounded.user, {
+        system: `${system}\n\n${grounded.system}`,
+        temperature: 0.3,
+        maxOutputTokens: GROUNDED_MAX_TOKENS,
+      }),
+      GENERATE_TIMEOUT_MS,
+    );
   } catch (err) {
     degraded = true;
     degradedError = err instanceof Error ? err.message.slice(0, 300) : String(err);
     finalText =
-      "I'm having trouble reaching the model right now. Please try again in a moment. " +
-      "(This is general information, not medical advice.)";
+      "That took longer than expected to generate — the model is running slowly right now. " +
+      "Please try again in a moment. (This is general information, not medical advice.)";
   }
 
   const tokensIn = estimateTokens(system + grounded.user);
