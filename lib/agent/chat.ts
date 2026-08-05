@@ -33,8 +33,12 @@ function needsTools(message: string): boolean {
  *  the hosting request budget is ~30s, so every model call needs a ceiling that
  *  leaves room to still send a graceful answer. */
 const GENERATE_TIMEOUT_MS = 18_000;
-const GROUNDED_CHUNKS = 4;
-const GROUNDED_MAX_TOKENS = 450;
+const GROUNDED_CHUNKS = 6;
+// Gemini 3.x counts internal "thinking" tokens against maxOutputTokens (measured
+// ~430-500 per call) and thinking cannot be disabled — thinkingConfig is
+// rejected with a 400. The cap must clear that floor or the visible answer is
+// truncated mid-sentence with finishReason=MAX_TOKENS.
+const GROUNDED_MAX_TOKENS = 2000;
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([

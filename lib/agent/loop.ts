@@ -21,8 +21,10 @@ const MAX_STEPS = 6;
 const MODEL_TIMEOUT_MS = 12_000;
 // Overall budget for the agent; once exceeded we stop calling tools and answer.
 const TURN_BUDGET_MS = 22_000;
-// Bounded answers keep generation time (and cost) predictable.
-const MAX_OUTPUT_TOKENS = 700;
+// Bounded answers keep generation time (and cost) predictable. Must stay well
+// above the ~430-500 internal "thinking" tokens Gemini 3.x charges against this
+// budget, or the visible answer is truncated (finishReason=MAX_TOKENS).
+const MAX_OUTPUT_TOKENS = 2000;
 
 // Note: `thinkingConfig` was measured to make no difference on gemini-3.5-flash
 // and is rejected outright (400) by the -lite variants, so it is not sent.
