@@ -23,6 +23,8 @@ export interface ToolContext {
   requestId: string;
   /** Accumulated citations (shared across search_knowledge calls). */
   citations: Citation[];
+  /** When true, update_profile refuses writes (the public demo's shared user). */
+  profileReadOnly?: boolean;
 }
 
 /** Register a chunk as a citation, returning its stable 1-based marker. */
@@ -323,10 +325,71 @@ const computeEnergyTargetsTool: AgentTool = {
   },
 };
 
+// ── update_profile ──────────────────────────────────────────────────────────
+const updateProfileSchema = z.object({
+  weight_kg: z.number().positive().max(500).optional(),
+  height_cm: z.number().positive().max(300).optional(),
+  age: z.number().int().positive().max(120).optional(),
+  sex: z.enum(["male", "female"]).optional(),
+  activity_level: z.enum(["sedentary", "light", "moderate", "active", "very_active"]).optional(),
+  goals: z.string().max(200).optional(),
+  display_name: z.string().max(80).optional(),
+});
+
+const updateProfile: AgentTool = {
+  name: "update_profile",
+  description:
+    "Save the user's stated biometrics or preferences (weight, height, age, sex, activity level, goals, name) to their profile — the single authoritative store for these facts. Call this whenever the user states or changes one of them; do NOT rely on conversational memory for profile facts.",
+  parameters: {
+    type: "object",
+    properties: {
+      weight_kg: { type: "number", description: "Body weight in kilograms" },
+      height_cm: { type: "number", description: "Height in centimeters" },
+      age: { type: "number" },
+      sex: { type: "string", enum: ["male", "female"] },
+      activity_level: {
+        type: "string",
+        enum: ["sedentary", "light", "moderate", "active", "very_active"],
+      },
+      goals: { type: "string", description: "Training/nutrition goal, e.g. 'lean bulk'" },
+      display_name: { type: "string", description: "What the user wants to be called" },
+    },
+  },
+  schema: updateProfileSchema,
+  async execute(args, ctx) {
+    const fields = updateProfileSchema.parse(args);
+    const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) {
+      return { data: { updated: [] }, summary: "update_profile → nothing to update" };
+    }
+    if (ctx.profileReadOnly) {
+      return {
+        data: {
+          error:
+            "The shared demo profile is read-only. Sign in to save your own profile; for now, ask the user to state their numbers in the conversation.",
+        },
+        summary: "update_profile → refused (demo profile is read-only)",
+      };
+    }
+
+    const { error } = await ctx.supabase
+      .from("profiles")
+      .upsert({ id: ctx.userId, ...Object.fromEntries(entries) }, { onConflict: "id" });
+    if (error) throw new Error(error.message);
+
+    const updated = entries.map(([k]) => k);
+    return {
+      data: { updated },
+      summary: `update_profile(${updated.join(", ")})`,
+    };
+  },
+};
+
 export const AGENT_TOOLS: AgentTool[] = [
   searchKnowledge,
   logWorkout,
   logNutrition,
   getHistory,
   computeEnergyTargetsTool,
+  updateProfile,
 ];
