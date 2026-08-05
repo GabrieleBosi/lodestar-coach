@@ -32,7 +32,7 @@ jobs:
         continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_CHAT_MODEL: gemini-3.5-flash
+          GEMINI_CHAT_MODEL: gemini-3.6-flash
           GEMINI_EMBED_MODEL: gemini-embedding-2
           EMBED_DIM: "1536"
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}

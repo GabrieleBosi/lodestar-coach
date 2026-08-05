@@ -12,7 +12,10 @@ import type { EmbedOptions, GenerateOptions, LLMProvider } from "./types";
 
 /** Defaults applied when the corresponding env var is unset. */
 export const DEFAULTS = {
-  chatModel: "gemini-3.5-flash",
+  // gemini-3.5-flash was measured at 20-43s for a single grounded call, which
+  // blows the ~30s serverless request budget; 3.6-flash answers the same prompt
+  // in ~3s. Override with GEMINI_CHAT_MODEL.
+  chatModel: "gemini-3.6-flash",
   embedModel: "gemini-embedding-2",
   embedDim: 1536,
 } as const;
