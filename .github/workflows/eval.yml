@@ -41,6 +41,19 @@ jobs:
           EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
         run: npm run eval
 
+      # Deterministic memory invariants (issue #2, P0-2): profile-owned facts
+      # never become memories; restated facts don't duplicate.
+      - name: Memory invariants
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_CHAT_MODEL: gemini-3.6-flash
+          GEMINI_EMBED_MODEL: gemini-embedding-2
+          EMBED_DIM: "1536"
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run eval:memory
+
       - name: Comment scores on PR
         if: always()
         uses: actions/github-script@v7
@@ -61,6 +74,7 @@ jobs:
               const t = report.thresholds;
               const row = (label, key, thr) => {
                 const cur = a[key];
+                if (cur == null) return `| ${label} | — | — | ${thr ?? "—"} | — |`;
                 const base = b ? b[key] : null;
                 const delta = base == null ? "" : ` (${cur - base >= 0 ? "+" : ""}${(cur - base).toFixed(3)})`;
                 const flag = thr != null ? (cur >= thr ? "✅" : "❌") : "";
@@ -80,6 +94,7 @@ jobs:
                 row("Citation correctness", "citation", null),
                 row("Retrieval hit@k", "hit_at_k", null),
                 row("Retrieval MRR", "mrr", null),
+                row("Tool routing", "tool_routing", t.tool_routing ?? null),
               ].join("\n");
             }
 

@@ -9,11 +9,15 @@
  * configured thresholds (so CI can gate on it).
  */
 import { execSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { GoogleGenAI } from "@google/genai";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
+import { streamTurn } from "../lib/agent/chat";
+import type { Database } from "../lib/db/types";
 import { readGeminiConfig } from "../lib/llm/gemini";
 import { buildGroundedPrompt } from "../lib/rag/prompt";
 import { retrieve, type RetrievedChunk } from "../lib/rag/retrieve";
@@ -26,11 +30,15 @@ const JUDGE_FALLBACKS = ["gemini-3.1-pro", "gemini-3-pro", "gemini-2.5-pro", "ge
 
 interface GoldenCase {
   id: string;
-  category: "in_scope" | "out_of_scope" | "unsafe" | "insufficient";
+  category: "in_scope" | "out_of_scope" | "unsafe" | "insufficient" | "tool_routing";
   question: string;
   expected_sources: string[];
   ideal_answer: string;
   must_refuse: boolean;
+  /** tool_routing cases: tools that MUST be called (issue #2, P0-1). */
+  expected_tools?: string[];
+  /** tool_routing cases: substring the final answer must contain. */
+  expected_answer_contains?: string;
 }
 
 interface JudgeScores {
@@ -50,6 +58,9 @@ interface CaseResult extends JudgeScores {
   answer: string;
   /** false when the case couldn't be scored (e.g., quota) — excluded from aggregates. */
   judged: boolean;
+  /** tool_routing cases only: did the required tools run (through streamTurn)? */
+  toolsOk?: boolean;
+  toolsCalled?: string[];
 }
 
 interface Report {
@@ -57,7 +68,7 @@ interface Report {
   commit: string;
   judge_model: string;
   k: number;
-  thresholds: { faithfulness: number; safety: number };
+  thresholds: { faithfulness: number; safety: number; tool_routing?: number };
   aggregate: {
     cases: number;
     judged: number;
@@ -67,6 +78,8 @@ interface Report {
     safety: number;
     hit_at_k: number;
     mrr: number;
+    /** null when the run contained no tool_routing cases. */
+    tool_routing: number | null;
   };
   pass: boolean;
   cases: CaseResult[];
@@ -161,6 +174,144 @@ function clamp01(n: unknown): number {
   return Math.max(0, Math.min(1, v));
 }
 
+// ── tool-routing harness ─────────────────────────────────────────────────────
+// P0-1 regressed in streamTurn (a pre-agent heuristic), not in runAgent — so
+// these cases MUST exercise the full streamTurn pipeline with an RLS-scoped
+// authed client, exactly like production. Testing runAgent directly would have
+// stayed green while prod was broken.
+
+const CTRL = "\u0000";
+
+interface RoutingHarness {
+  authed: SupabaseClient<Database>;
+  userId: string;
+  cleanup: () => Promise<void>;
+}
+
+async function setupRoutingHarness(): Promise<RoutingHarness> {
+  const admin = createScriptSupabaseAdmin();
+  const email = `eval-routing+${Date.now()}@lodestar.test`;
+  const password = randomUUID();
+  const { data: created, error } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+  });
+  if (error || !created?.user) throw error ?? new Error("failed to create eval user");
+  const userId = created.user.id;
+
+  const authed = createClient<Database>(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  );
+  const { error: signInErr } = await authed.auth.signInWithPassword({ email, password });
+  if (signInErr) throw signInErr;
+
+  // The logged session the routing questions ask about.
+  const date = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10);
+  await authed.from("workouts").insert({
+    user_id: userId,
+    date,
+    type: "squat",
+    notes: "Back squat 5x5 @ 102.5 kg RPE 8",
+    payload: { details: "Back squat 5x5 @ 102.5 kg RPE 8" },
+  });
+
+  return {
+    authed,
+    userId,
+    cleanup: async () => {
+      await admin.auth.admin.deleteUser(userId);
+    },
+  };
+}
+
+/** Read a streamTurn Response: returns the answer text and the META actions. */
+async function readTurnStream(
+  res: Response,
+): Promise<{ answer: string; actions: { name: string; ok?: boolean }[] }> {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let full = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) full += decoder.decode(value, { stream: true });
+    if (done) break;
+  }
+  const firstNl = full.indexOf("\n");
+  const metaIdx = full.lastIndexOf(CTRL + "META:");
+  const rawBody = metaIdx >= 0 ? full.slice(firstNl + 1, metaIdx) : full.slice(firstNl + 1);
+  const answer = rawBody.split(CTRL).join("");
+  let actions: { name: string; ok?: boolean }[] = [];
+  if (metaIdx >= 0) {
+    try {
+      const meta = JSON.parse(full.slice(metaIdx + CTRL.length + "META:".length)) as {
+        actions?: { name: string; ok?: boolean }[];
+      };
+      actions = meta.actions ?? [];
+    } catch {
+      actions = [];
+    }
+  }
+  return { answer, actions };
+}
+
+async function runToolRoutingCase(
+  harness: RoutingHarness,
+  provider: ReturnType<typeof createScriptProvider>,
+  c: GoldenCase,
+): Promise<CaseResult> {
+  const { data: convo, error } = await harness.authed
+    .from("conversations")
+    .insert({ user_id: harness.userId, title: `eval: ${c.id}` })
+    .select("id")
+    .single();
+  if (error || !convo) throw error ?? new Error("failed to create conversation");
+
+  await harness.authed
+    .from("messages")
+    .insert({ conversation_id: convo.id, role: "user", content: c.question });
+
+  const res = streamTurn({
+    supabase: harness.authed,
+    provider,
+    userId: harness.userId,
+    requestId: randomUUID(),
+    conversationId: convo.id,
+    message: c.question,
+    history: [],
+    extractMemory: false,
+    stage: "eval.request",
+  });
+  const { answer, actions } = await readTurnStream(res);
+
+  const called = actions.map((a) => a.name);
+  const toolsPresent = (c.expected_tools ?? []).every((t) =>
+    actions.some((a) => a.name === t && a.ok !== false),
+  );
+  const answerOk = c.expected_answer_contains ? answer.includes(c.expected_answer_contains) : true;
+  const toolsOk = toolsPresent && answerOk;
+
+  return {
+    id: c.id,
+    category: c.category,
+    question: c.question,
+    hit: null,
+    reciprocalRank: null,
+    answer,
+    judged: false, // no LLM-judge scores; gated via the tool_routing metric instead
+    toolsOk,
+    toolsCalled: called,
+    faithfulness: 0,
+    relevance: 0,
+    citation: 0,
+    safety: 0,
+    notes: toolsOk
+      ? `tools ok: ${called.join(",")}`
+      : `expected ${c.expected_tools?.join("+")}${answerOk ? "" : ` and answer containing "${c.expected_answer_contains}"`}; got [${called.join(",")}]`,
+  };
+}
+
 async function main() {
   await loadEnv();
 
@@ -234,7 +385,40 @@ async function main() {
   }
 
   const results: CaseResult[] = [];
+  const harnessBox: { current: RoutingHarness | null } = { current: null };
+  const getHarness = async () => (harnessBox.current ??= await setupRoutingHarness());
+
   for (const c of selected) {
+    if (c.category === "tool_routing") {
+      try {
+        const result = await runToolRoutingCase(await getHarness(), provider, c);
+        results.push(result);
+        console.log(
+          `${result.toolsOk ? "✓" : "✗"} ${c.id} [tool_routing] tools=[${result.toolsCalled?.join(",")}] ok=${result.toolsOk}`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message.slice(0, 120) : String(err);
+        results.push({
+          id: c.id,
+          category: c.category,
+          question: c.question,
+          hit: null,
+          reciprocalRank: null,
+          answer: "",
+          judged: false,
+          toolsOk: false,
+          toolsCalled: [],
+          faithfulness: 0,
+          relevance: 0,
+          citation: 0,
+          safety: 0,
+          notes: `harness error: ${msg}`,
+        });
+        console.log(`✗ ${c.id} [tool_routing] harness error: ${msg}`);
+      }
+      await sleep(PACE_MS);
+      continue;
+    }
     try {
       const chunks = await withRetry(
         () => retrieve(supabase, provider, c.question, K),
@@ -284,9 +468,12 @@ async function main() {
     await sleep(PACE_MS);
   }
 
+  if (harnessBox.current) await harnessBox.current.cleanup();
+
   const judgedResults = results.filter((r) => r.judged);
   const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
   const retrievalCases = judgedResults.filter((r) => r.hit !== null);
+  const routingResults = results.filter((r) => r.category === "tool_routing");
   const aggregate = {
     cases: results.length,
     judged: judgedResults.length,
@@ -296,13 +483,25 @@ async function main() {
     safety: round(mean(judgedResults.map((r) => r.safety))),
     hit_at_k: round(mean(retrievalCases.map((r) => (r.hit ? 1 : 0)))),
     mrr: round(mean(retrievalCases.map((r) => r.reciprocalRank ?? 0))),
+    tool_routing: routingResults.length
+      ? round(mean(routingResults.map((r) => (r.toolsOk ? 1 : 0))))
+      : null,
   };
 
   const thresholds = JSON.parse(
     await fs.readFile(path.join(root, "evals", "thresholds.json"), "utf8"),
-  ) as { faithfulness: number; safety: number };
-  const pass =
-    aggregate.faithfulness >= thresholds.faithfulness && aggregate.safety >= thresholds.safety;
+  ) as { faithfulness: number; safety: number; tool_routing?: number };
+  const routingPass =
+    thresholds.tool_routing == null ||
+    aggregate.tool_routing == null ||
+    aggregate.tool_routing >= thresholds.tool_routing;
+  // Judge gates are vacuous when the run judged nothing (e.g. an EVAL_IDS
+  // subset of only tool_routing cases) — mirroring how tool_routing is vacuous
+  // when no routing cases ran. Full runs always contain judged cases.
+  const judgePass =
+    judgedResults.length === 0 ||
+    (aggregate.faithfulness >= thresholds.faithfulness && aggregate.safety >= thresholds.safety);
+  const pass = judgePass && routingPass;
 
   let commit = "unknown";
   try {
@@ -340,7 +539,10 @@ async function main() {
 
   console.log("\n── Aggregate ──");
   console.log(aggregate);
-  console.log(`thresholds: faithfulness>=${thresholds.faithfulness}, safety>=${thresholds.safety}`);
+  console.log(
+    `thresholds: faithfulness>=${thresholds.faithfulness}, safety>=${thresholds.safety}` +
+      (thresholds.tool_routing != null ? `, tool_routing>=${thresholds.tool_routing}` : ""),
+  );
   console.log(pass ? "RESULT: PASS ✅" : "RESULT: FAIL ❌");
 
   if (!pass) process.exit(1);
@@ -374,19 +576,24 @@ function renderMarkdown(r: Report): string {
   lines.push(`| Safety / refusal | ${a.safety} |`);
   lines.push(`| Retrieval hit@${r.k} | ${a.hit_at_k} |`);
   lines.push(`| Retrieval MRR | ${a.mrr} |`);
+  if (a.tool_routing != null) lines.push(`| Tool routing | ${a.tool_routing} |`);
   lines.push("");
   lines.push(`## Per-case`);
   lines.push("");
-  lines.push(`| ID | Category | Faith | Rel | Cite | Safe | hit@k | RR |`);
-  lines.push(`| --- | --- | --- | --- | --- | --- | --- | --- |`);
+  lines.push(`| ID | Category | Faith | Rel | Cite | Safe | hit@k | RR | Tools |`);
+  lines.push(`| --- | --- | --- | --- | --- | --- | --- | --- | --- |`);
   for (const c of r.cases) {
-    const s = (v: number) => (c.judged ? String(v) : "n/j");
+    const routing = c.category === "tool_routing";
+    const s = (v: number) => (routing ? "—" : c.judged ? String(v) : "n/j");
+    const tools = routing ? (c.toolsOk ? "✅" : "❌") : "—";
     lines.push(
-      `| ${c.id} | ${c.category} | ${s(c.faithfulness)} | ${s(c.relevance)} | ${s(c.citation)} | ${s(c.safety)} | ${c.hit === null ? "—" : c.hit ? "1" : "0"} | ${c.reciprocalRank === null ? "—" : c.reciprocalRank.toFixed(2)} |`,
+      `| ${c.id} | ${c.category} | ${s(c.faithfulness)} | ${s(c.relevance)} | ${s(c.citation)} | ${s(c.safety)} | ${c.hit === null ? "—" : c.hit ? "1" : "0"} | ${c.reciprocalRank === null ? "—" : c.reciprocalRank.toFixed(2)} | ${tools} |`,
     );
   }
   lines.push("");
-  lines.push(`_"n/j" = not judged (excluded from aggregates), e.g. skipped on a rate-limit._`);
+  lines.push(
+    `_"n/j" = not judged (excluded from aggregates), e.g. skipped on a rate-limit. Tool-routing cases run the full streamTurn pipeline and are gated by the tool_routing metric, not the judge._`,
+  );
   lines.push("");
   return lines.join("\n");
 }
@@ -395,8 +602,10 @@ function renderHtml(r: Report): string {
   const a = r.aggregate;
   const rows = r.cases
     .map((c) => {
-      const s = (v: number) => (c.judged ? String(v) : "n/j");
-      return `<tr><td>${c.id}</td><td>${c.category}</td><td>${s(c.faithfulness)}</td><td>${s(c.relevance)}</td><td>${s(c.citation)}</td><td>${s(c.safety)}</td><td>${c.hit === null ? "—" : c.hit ? "1" : "0"}</td><td>${c.reciprocalRank === null ? "—" : c.reciprocalRank.toFixed(2)}</td></tr>`;
+      const routing = c.category === "tool_routing";
+      const s = (v: number) => (routing ? "—" : c.judged ? String(v) : "n/j");
+      const tools = routing ? (c.toolsOk ? "✅" : "❌") : "—";
+      return `<tr><td>${c.id}</td><td>${c.category}</td><td>${s(c.faithfulness)}</td><td>${s(c.relevance)}</td><td>${s(c.citation)}</td><td>${s(c.safety)}</td><td>${c.hit === null ? "—" : c.hit ? "1" : "0"}</td><td>${c.reciprocalRank === null ? "—" : c.reciprocalRank.toFixed(2)}</td><td>${tools}</td></tr>`;
     })
     .join("\n");
   return `<!doctype html><html><head><meta charset="utf-8"><title>Lodestar eval report</title>
@@ -406,10 +615,10 @@ function renderHtml(r: Report): string {
 <p>Generated ${r.generated_at} · commit <code>${r.commit}</code> · judge <code>${r.judge_model}</code> · k=${r.k} · cases=${a.cases}</p>
 <p>Result: <span class="${r.pass ? "pass" : "fail"}">${r.pass ? "PASS" : "FAIL"}</span> (faithfulness ≥ ${r.thresholds.faithfulness}, safety ≥ ${r.thresholds.safety})</p>
 <h2>Aggregate</h2>
-<table class="agg"><tr><th>Faithfulness</th><th>Relevance</th><th>Citation</th><th>Safety</th><th>hit@${r.k}</th><th>MRR</th></tr>
-<tr><td>${a.faithfulness}</td><td>${a.relevance}</td><td>${a.citation}</td><td>${a.safety}</td><td>${a.hit_at_k}</td><td>${a.mrr}</td></tr></table>
+<table class="agg"><tr><th>Faithfulness</th><th>Relevance</th><th>Citation</th><th>Safety</th><th>hit@${r.k}</th><th>MRR</th><th>Tool routing</th></tr>
+<tr><td>${a.faithfulness}</td><td>${a.relevance}</td><td>${a.citation}</td><td>${a.safety}</td><td>${a.hit_at_k}</td><td>${a.mrr}</td><td>${a.tool_routing ?? "—"}</td></tr></table>
 <h2>Per-case</h2>
-<table><tr><th>ID</th><th>Category</th><th>Faith</th><th>Rel</th><th>Cite</th><th>Safe</th><th>hit@k</th><th>RR</th></tr>
+<table><tr><th>ID</th><th>Category</th><th>Faith</th><th>Rel</th><th>Cite</th><th>Safe</th><th>hit@k</th><th>RR</th><th>Tools</th></tr>
 ${rows}
 </table>
 </body></html>`;
