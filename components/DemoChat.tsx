@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useRef, useState } from "react";
 
+import { readTurnStream } from "@/lib/chat-stream";
+
 interface Citation {
   n: number;
   title: string | null;
@@ -64,47 +66,25 @@ export default function DemoChat() {
         ]);
         return;
       }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let metaParsed = false;
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (value) buffer += decoder.decode(value, { stream: true });
-        if (!metaParsed) {
-          const nl = buffer.indexOf("\n");
-          if (nl !== -1) {
-            const meta = JSON.parse(buffer.slice(0, nl)) as {
-              conversationId: string;
-              sources: Citation[];
-              actions?: AgentAction[];
-            };
-            buffer = buffer.slice(nl + 1);
-            metaParsed = true;
-            conversationId.current = meta.conversationId;
-            setMessages((m) => [
-              ...m,
-              {
-                id: assistantId,
-                role: "assistant",
-                content: "",
-                citations: meta.sources,
-                actions: meta.actions,
-              },
-            ]);
-            added = true;
-          }
-        }
-        if (metaParsed && added && buffer) {
-          const t = buffer;
-          buffer = "";
+      await readTurnStream(res.body, {
+        onStart: (cid) => {
+          conversationId.current = cid;
+          setMessages((m) => [...m, { id: assistantId, role: "assistant", content: "" }]);
+          added = true;
+        },
+        onText: (t) =>
           setMessages((m) =>
             m.map((x) => (x.id === assistantId ? { ...x, content: x.content + t } : x)),
-          );
-        }
-        if (done) break;
-      }
+          ),
+        onMeta: (meta) =>
+          setMessages((m) =>
+            m.map((x) =>
+              x.id === assistantId
+                ? { ...x, citations: meta.sources, actions: meta.actions }
+                : x,
+            ),
+          ),
+      });
     } catch {
       if (!added)
         setMessages((m) => [

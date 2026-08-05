@@ -33,87 +33,130 @@ export interface TurnParams {
   stage?: string;
 }
 
-export async function streamTurn(params: TurnParams): Promise<Response> {
+/** Control byte separating keepalives and the trailing metadata from answer text. */
+const CTRL = "\u0000";
+const KEEPALIVE_MS = 5_000;
+
+export function streamTurn(params: TurnParams): Response {
   const { supabase, provider, userId, requestId, conversationId, message, history } = params;
   const stage = params.stage ?? "chat.request";
-
-  let personalization = "";
-  try {
-    personalization = await getPersonalizationContext({ supabase, provider, userId }, message);
-  } catch {
-    personalization = "";
-  }
-  const system = personalization
-    ? `${AGENT_SYSTEM_PROMPT}\n\nPERSONALIZATION CONTEXT (about this user):\n${personalization}`
-    : AGENT_SYSTEM_PROMPT;
-
-  const started = Date.now();
-  const agent = await runAgent({
-    ctx: { supabase, provider, userId, requestId, citations: [] },
-    system,
-    history,
-    userMessage: message,
-  });
-  const latencyMs = Date.now() - started;
-
-  // Request-level trace (drives the metrics dashboard).
-  await supabase.from("traces").insert({
-    request_id: requestId,
-    user_id: userId,
-    stage,
-    tokens: agent.tokensIn + agent.tokensOut,
-    latency_ms: latencyMs,
-    cost_usd: estimateCostUsd(agent.tokensIn, agent.tokensOut),
-    payload: {
-      actions: agent.actions.length,
-      degraded: agent.degraded,
-      degradedError: agent.degradedError ?? null,
-    } as unknown as Json,
-  });
-
-  const meta = {
-    conversationId,
-    sources: agent.citations,
-    actions: agent.actions.map((a) => ({
-      name: a.name,
-      ok: a.ok,
-      summary: a.summary,
-      error: a.error,
-    })),
-  };
-
   const encoder = new TextEncoder();
+
+  // Everything slow runs INSIDE the stream. Hosting proxies terminate a request
+  // that sends no data for too long ("inactivity timeout"), and a tool-using
+  // turn takes far longer than that budget — so the first byte goes out
+  // immediately and keepalives flow until the answer is ready.
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      controller.enqueue(encoder.encode(JSON.stringify(meta) + "\n"));
-      // Emit in chunks (the client renders them progressively) but without an
-      // artificial delay — the serverless request budget is ~30s and a long
-      // answer would otherwise burn seconds here.
-      for (const piece of chunkText(agent.finalText)) {
-        controller.enqueue(encoder.encode(piece));
+      let closed = false;
+      const send = (s: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(s));
+        } catch {
+          closed = true;
+        }
+      };
+
+      // Frame 1, sent right away: enough for the client to bind the conversation.
+      send(JSON.stringify({ conversationId }) + "\n");
+      const keepalive = setInterval(() => send(CTRL), KEEPALIVE_MS);
+
+      const started = Date.now();
+      try {
+        let personalization = "";
+        try {
+          personalization = await getPersonalizationContext(
+            { supabase, provider, userId },
+            message,
+          );
+        } catch {
+          personalization = "";
+        }
+        const system = personalization
+          ? `${AGENT_SYSTEM_PROMPT}\n\nPERSONALIZATION CONTEXT (about this user):\n${personalization}`
+          : AGENT_SYSTEM_PROMPT;
+
+        const agent = await runAgent({
+          ctx: { supabase, provider, userId, requestId, citations: [] },
+          system,
+          history,
+          userMessage: message,
+        });
+        const latencyMs = Date.now() - started;
+        clearInterval(keepalive);
+
+        for (const piece of chunkText(agent.finalText)) send(piece);
+
+        // Trailing metadata: sources/actions are only known once the agent is done.
+        send(
+          CTRL +
+            "META:" +
+            JSON.stringify({
+              sources: agent.citations,
+              actions: agent.actions.map((a) => ({
+                name: a.name,
+                ok: a.ok,
+                summary: a.summary,
+                error: a.error,
+              })),
+            }),
+        );
+
+        await supabase.from("traces").insert({
+          request_id: requestId,
+          user_id: userId,
+          stage,
+          tokens: agent.tokensIn + agent.tokensOut,
+          latency_ms: latencyMs,
+          cost_usd: estimateCostUsd(agent.tokensIn, agent.tokensOut),
+          payload: {
+            actions: agent.actions.length,
+            degraded: agent.degraded,
+            degradedError: agent.degradedError ?? null,
+          } as unknown as Json,
+        });
+
+        await supabase.from("messages").insert({
+          conversation_id: conversationId,
+          role: "assistant",
+          content: agent.finalText,
+          citations: agent.citations as unknown as Json,
+          tool_calls: agent.actions as unknown as Json,
+          tokens_in: agent.tokensIn,
+          tokens_out: agent.tokensOut,
+          latency_ms: latencyMs,
+          cost_usd: estimateCostUsd(agent.tokensIn, agent.tokensOut),
+        });
+        await supabase
+          .from("conversations")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", conversationId);
+
+        if (params.extractMemory) {
+          await extractAndStoreMemories({ supabase, provider, userId }, message, agent.finalText);
+        }
+      } catch (err) {
+        send(
+          "\n\nSomething went wrong while answering. Please try again. " +
+            "(This is general information, not medical advice.)",
+        );
+        await supabase.from("traces").insert({
+          request_id: requestId,
+          user_id: userId,
+          stage,
+          latency_ms: Date.now() - started,
+          payload: {
+            error: err instanceof Error ? err.message.slice(0, 300) : String(err),
+          } as unknown as Json,
+        });
+      } finally {
+        clearInterval(keepalive);
+        if (!closed) {
+          closed = true;
+          controller.close();
+        }
       }
-
-      await supabase.from("messages").insert({
-        conversation_id: conversationId,
-        role: "assistant",
-        content: agent.finalText,
-        citations: agent.citations as unknown as Json,
-        tool_calls: agent.actions as unknown as Json,
-        tokens_in: agent.tokensIn,
-        tokens_out: agent.tokensOut,
-        latency_ms: latencyMs,
-        cost_usd: estimateCostUsd(agent.tokensIn, agent.tokensOut),
-      });
-      await supabase
-        .from("conversations")
-        .update({ updated_at: new Date().toISOString() })
-        .eq("id", conversationId);
-
-      if (params.extractMemory) {
-        await extractAndStoreMemories({ supabase, provider, userId }, message, agent.finalText);
-      }
-
-      controller.close();
     },
   });
 

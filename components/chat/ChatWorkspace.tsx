@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import SignOutButton from "@/components/SignOutButton";
+import { readTurnStream } from "@/lib/chat-stream";
 
 interface Citation {
   n: number;
@@ -125,55 +126,20 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
         return;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let metaParsed = false;
-
-      const pump = async (): Promise<void> => {
-        const { done, value } = await reader.read();
-        if (value) buffer += decoder.decode(value, { stream: true });
-
-        if (!metaParsed) {
-          const nl = buffer.indexOf("\n");
-          if (nl !== -1) {
-            const metaLine = buffer.slice(0, nl);
-            buffer = buffer.slice(nl + 1);
-            metaParsed = true;
-            try {
-              const meta = JSON.parse(metaLine) as {
-                conversationId: string;
-                sources: Citation[];
-                actions?: AgentAction[];
-              };
-              setConversationId(meta.conversationId);
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: assistantId,
-                  role: "assistant",
-                  content: "",
-                  citations: meta.sources,
-                  actions: meta.actions,
-                },
-              ]);
-              assistantAdded = true;
-            } catch {
-              // ignore malformed meta line
-            }
-          }
-        }
-
-        if (metaParsed && assistantAdded && buffer) {
-          const text2 = buffer;
-          buffer = "";
-          updateMessage(assistantId, (m) => ({ ...m, content: m.content + text2 }));
-        }
-
-        if (!done) await pump();
-      };
-
-      await pump();
+      await readTurnStream(res.body, {
+        onStart: (cid) => {
+          setConversationId(cid);
+          setMessages((prev) => [...prev, { id: assistantId, role: "assistant", content: "" }]);
+          assistantAdded = true;
+        },
+        onText: (t) => updateMessage(assistantId, (m) => ({ ...m, content: m.content + t })),
+        onMeta: (meta) =>
+          updateMessage(assistantId, (m) => ({
+            ...m,
+            citations: meta.sources,
+            actions: meta.actions,
+          })),
+      });
     } catch {
       if (!assistantAdded) {
         setMessages((prev) => [
