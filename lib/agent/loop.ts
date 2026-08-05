@@ -16,7 +16,13 @@ import type { Citation } from "../rag/prompt";
 import { AGENT_TOOLS, type ToolContext } from "./tools";
 
 const MAX_STEPS = 6;
-const MODEL_TIMEOUT_MS = 45_000;
+// Must stay well under the hosting request budget (~30s) so our own timeout and
+// degradation actually fire instead of the platform killing the whole function.
+const MODEL_TIMEOUT_MS = 12_000;
+// Overall budget for the agent; once exceeded we stop calling tools and answer.
+const TURN_BUDGET_MS = 22_000;
+// Bounded answers keep generation time (and cost) predictable.
+const MAX_OUTPUT_TOKENS = 700;
 
 // Serverless functions cap a request at ~30s, and a tool-using turn makes several
 // sequential model calls. Gemini 3.x enables "thinking" by default, which adds
@@ -196,13 +202,22 @@ export async function runAgent(params: {
   let tokensIn = 0;
   let tokensOut = 0;
 
+  const turnStarted = Date.now();
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
+      // Out of budget: stop offering tools so the next call must answer.
+      const outOfBudget = Date.now() - turnStarted > TURN_BUDGET_MS;
       const result = await callModel(
         ai,
         cfg.chatModel,
         contents,
-        { systemInstruction: system, tools, temperature: 0.3, ...THINKING_OFF },
+        {
+          systemInstruction: system,
+          temperature: 0.3,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+          ...(outOfBudget ? {} : { tools }),
+          ...THINKING_OFF,
+        },
         ctx,
       );
       tokensIn += result.tokensIn;
@@ -229,7 +244,12 @@ export async function runAgent(params: {
         ai,
         cfg.chatModel,
         contents,
-        { systemInstruction: system, temperature: 0.3, ...THINKING_OFF },
+        {
+          systemInstruction: system,
+          temperature: 0.3,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+          ...THINKING_OFF,
+        },
         ctx,
       );
       tokensIn += result.tokensIn;
