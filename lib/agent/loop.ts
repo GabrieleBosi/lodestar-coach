@@ -24,10 +24,9 @@ const TURN_BUDGET_MS = 22_000;
 // Bounded answers keep generation time (and cost) predictable.
 const MAX_OUTPUT_TOKENS = 700;
 
-// Serverless functions cap a request at ~30s, and a tool-using turn makes several
-// sequential model calls. Gemini 3.x enables "thinking" by default, which adds
-// substantial latency per call, so disable it to keep turns inside the budget.
-const THINKING_OFF = { thinkingConfig: { thinkingBudget: 0 } } as const;
+// Note: `thinkingConfig` was measured to make no difference on gemini-3.5-flash
+// and is rejected outright (400) by the -lite variants, so it is not sent.
+const THINKING_OFF = {} as const;
 
 const DEGRADED_MESSAGE =
   "I'm having trouble reaching the model right now — this can happen under high load or free-tier rate limits. Please try again in a moment. (This is general information, not medical advice.)";
