@@ -18,6 +18,11 @@ import { AGENT_TOOLS, type ToolContext } from "./tools";
 const MAX_STEPS = 6;
 const MODEL_TIMEOUT_MS = 45_000;
 
+// Serverless functions cap a request at ~30s, and a tool-using turn makes several
+// sequential model calls. Gemini 3.x enables "thinking" by default, which adds
+// substantial latency per call, so disable it to keep turns inside the budget.
+const THINKING_OFF = { thinkingConfig: { thinkingBudget: 0 } } as const;
+
 const DEGRADED_MESSAGE =
   "I'm having trouble reaching the model right now — this can happen under high load or free-tier rate limits. Please try again in a moment. (This is general information, not medical advice.)";
 
@@ -197,7 +202,7 @@ export async function runAgent(params: {
         ai,
         cfg.chatModel,
         contents,
-        { systemInstruction: system, tools, temperature: 0.3 },
+        { systemInstruction: system, tools, temperature: 0.3, ...THINKING_OFF },
         ctx,
       );
       tokensIn += result.tokensIn;
@@ -224,7 +229,7 @@ export async function runAgent(params: {
         ai,
         cfg.chatModel,
         contents,
-        { systemInstruction: system, temperature: 0.3 },
+        { systemInstruction: system, temperature: 0.3, ...THINKING_OFF },
         ctx,
       );
       tokensIn += result.tokensIn;

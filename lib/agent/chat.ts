@@ -14,10 +14,6 @@ import { AGENT_SYSTEM_PROMPT } from "../rag/prompt";
 import { runAgent } from "./loop";
 import { extractAndStoreMemories, getPersonalizationContext } from "./memory";
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 function chunkText(text: string, size = 24): string[] {
   const out: string[] = [];
   for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
@@ -90,9 +86,11 @@ export async function streamTurn(params: TurnParams): Promise<Response> {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       controller.enqueue(encoder.encode(JSON.stringify(meta) + "\n"));
+      // Emit in chunks (the client renders them progressively) but without an
+      // artificial delay — the serverless request budget is ~30s and a long
+      // answer would otherwise burn seconds here.
       for (const piece of chunkText(agent.finalText)) {
         controller.enqueue(encoder.encode(piece));
-        await sleep(8);
       }
 
       await supabase.from("messages").insert({
