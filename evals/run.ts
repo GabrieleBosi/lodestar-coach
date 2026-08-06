@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { GoogleGenAI } from "@google/genai";
+import { type Content, GoogleGenAI } from "@google/genai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { streamTurn } from "../lib/agent/chat";
@@ -39,6 +39,10 @@ interface GoldenCase {
   expected_tools?: string[];
   /** tool_routing cases: substring the final answer must contain. */
   expected_answer_contains?: string;
+  /** tool_routing cases: tools that must NOT be called on the final turn. */
+  forbidden_tools?: string[];
+  /** tool_routing cases: turns sent first, in the same conversation, to set up state. */
+  prior_turns?: string[];
 }
 
 interface JudgeScores {
@@ -268,6 +272,29 @@ async function runToolRoutingCase(
     .single();
   if (error || !convo) throw error ?? new Error("failed to create conversation");
 
+  // Prior turns build real conversation history first — the spurious-repeat bug
+  // only surfaces on a later turn, so a single-turn case cannot catch it.
+  const history: Content[] = [];
+  for (const turn of c.prior_turns ?? []) {
+    await harness.authed
+      .from("messages")
+      .insert({ conversation_id: convo.id, role: "user", content: turn });
+    const priorRes = streamTurn({
+      supabase: harness.authed,
+      provider,
+      userId: harness.userId,
+      requestId: randomUUID(),
+      conversationId: convo.id,
+      message: turn,
+      history: [...history],
+      extractMemory: false,
+      stage: "eval.request",
+    });
+    const prior = await readTurnStream(priorRes);
+    history.push({ role: "user", parts: [{ text: turn }] });
+    history.push({ role: "model", parts: [{ text: prior.answer }] });
+  }
+
   await harness.authed
     .from("messages")
     .insert({ conversation_id: convo.id, role: "user", content: c.question });
@@ -279,7 +306,7 @@ async function runToolRoutingCase(
     requestId: randomUUID(),
     conversationId: convo.id,
     message: c.question,
-    history: [],
+    history,
     extractMemory: false,
     stage: "eval.request",
   });
@@ -289,8 +316,9 @@ async function runToolRoutingCase(
   const toolsPresent = (c.expected_tools ?? []).every((t) =>
     actions.some((a) => a.name === t && a.ok !== false),
   );
+  const forbiddenHit = (c.forbidden_tools ?? []).filter((t) => called.includes(t));
   const answerOk = c.expected_answer_contains ? answer.includes(c.expected_answer_contains) : true;
-  const toolsOk = toolsPresent && answerOk;
+  const toolsOk = toolsPresent && answerOk && forbiddenHit.length === 0;
 
   return {
     id: c.id,
@@ -307,8 +335,10 @@ async function runToolRoutingCase(
     citation: 0,
     safety: 0,
     notes: toolsOk
-      ? `tools ok: ${called.join(",")}`
-      : `expected ${c.expected_tools?.join("+")}${answerOk ? "" : ` and answer containing "${c.expected_answer_contains}"`}; got [${called.join(",")}]`,
+      ? `tools ok: ${called.join(",") || "none"}`
+      : forbiddenHit.length > 0
+        ? `forbidden tool(s) called: ${forbiddenHit.join(",")}; got [${called.join(",")}]`
+        : `expected ${c.expected_tools?.join("+")}${answerOk ? "" : ` and answer containing "${c.expected_answer_contains}"`}; got [${called.join(",")}]`,
   };
 }
 
