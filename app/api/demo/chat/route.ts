@@ -7,7 +7,7 @@ import { createSupabaseAdminClient } from "@/lib/db/admin";
 import { streamTurn } from "@/lib/agent/chat";
 import { isRateLimited } from "@/lib/agent/ratelimit";
 import { getLLMProvider } from "@/lib/llm";
-import { CachingProvider } from "@/lib/llm/cache";
+import { EmbeddingCache } from "@/lib/llm/cache";
 import { readGeminiConfig } from "@/lib/llm/gemini";
 
 export const runtime = "nodejs";
@@ -84,7 +84,7 @@ export async function POST(request: Request) {
     .insert({ conversation_id: convoId, role: "user", content: message });
 
   const cfg = readGeminiConfig();
-  const provider = new CachingProvider(getLLMProvider(), supabase, cfg.embedModel);
+  const provider = new EmbeddingCache(getLLMProvider(), supabase, cfg.embedModel);
 
   return streamTurn({
     supabase,
