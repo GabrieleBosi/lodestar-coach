@@ -34,21 +34,6 @@ export const PENDING_TEXT = "Still working on this…";
 export const FAILED_TEXT = "This turn didn't finish, so there's no reply saved for it.";
 
 /**
- * Insert a placeholder wherever a question has no reply.
- *
- * Any user message not followed by an assistant message is a gap — not only the
- * last one. Restricting it to the last would leave a retried turn reading as two
- * consecutive questions, because a retry appends a new turn rather than
- * rewriting history; checking every position is what keeps the live transcript
- * and a reload showing the same thing.
- *
- * Only a *trailing* gap can still be running. A mid-transcript one is settled by
- * definition: something came after it.
- *
- * @param streamingHere this tab is currently streaming a turn for this conversation
- * @param now injectable clock, for checks
- */
-/**
  * When a pending gap will have settled, in ms from now, or null if none is
  * pending.
  *
@@ -71,6 +56,21 @@ export function msUntilGapSettles(
   return Math.max(0, IN_FLIGHT_GRACE_MS - age);
 }
 
+/**
+ * Insert a placeholder wherever a question has no reply.
+ *
+ * Any user message not followed by an assistant message is a gap — not only the
+ * last one. Restricting it to the last would leave a retried turn reading as two
+ * consecutive questions, because a retry appends a new turn rather than
+ * rewriting history; checking every position is what keeps the live transcript
+ * and a reload showing the same thing.
+ *
+ * Only a *trailing* gap can still be running. A mid-transcript one is settled by
+ * definition: something came after it.
+ *
+ * @param streamingHere this tab is currently streaming a turn for this conversation
+ * @param now injectable clock, for checks
+ */
 export function withGapMarkers<T extends TranscriptMessage>(
   messages: T[],
   streamingHere: boolean,
