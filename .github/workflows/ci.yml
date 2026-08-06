@@ -3,8 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
+  # NO `branches:` filter. Stacked PRs target another feature branch, not main,
+  # and with a filter they ran ZERO checks while GitHub still displayed
+  # "Ready to merge" — visually identical to passing. Lint/typecheck/build are
+  # cheap and use no model quota, so they run on every pull request regardless
+  # of base. (eval.yml stays pinned to main on purpose — see the note there.)
   pull_request:
-    branches: [main]
 
 jobs:
   build:
@@ -17,7 +21,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Matches eval.yml: 22, not 20. Node ships a native WebSocket only
+          # from 22, which @supabase/realtime-js requires.
+          node-version: "22"
           cache: "npm"
 
       - name: Install dependencies

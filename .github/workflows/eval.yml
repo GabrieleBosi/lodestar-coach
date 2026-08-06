@@ -1,6 +1,11 @@
 name: Eval
 
 on:
+  # DELIBERATELY pinned to main-targeting PRs, unlike ci.yml which runs on every
+  # PR regardless of base. Each eval run spends real model quota against a
+  # free-tier key, so stacked PRs (feature -> feature) are not worth an eval;
+  # the stack is evaluated when its head PR targets main. If you ever want a
+  # stacked PR evaluated, trigger it by hand via workflow_dispatch.
   pull_request:
     branches: [main]
   # Nightly + on-demand runs exercise the FULL golden set; PRs run the fast
