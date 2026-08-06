@@ -5,8 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import AnswerBody, { type Citation, citedSources } from "@/components/chat/AnswerBody";
 import SignOutButton from "@/components/SignOutButton";
-import { isFailedTurn, readTurnStream } from "@/lib/chat-stream";
-import { withGapMarkers } from "@/lib/turn-gaps";
+import { isFailedTurn, readTurnStream, TURN_FAILED } from "@/lib/chat-stream";
+import { msUntilGapSettles, withGapMarkers } from "@/lib/turn-gaps";
 
 interface AgentAction {
   name: string;
@@ -23,6 +23,8 @@ interface ChatMessage {
   actions?: AgentAction[];
   /** Synthesized placeholder for a turn with no assistant row — not persisted. */
   gap?: "pending" | "failed";
+  /** Text arrived but the turn never completed: what is shown is partial. */
+  truncated?: boolean;
   /** Server timestamp; only present on loaded rows. */
   createdAt?: string;
 }
@@ -60,8 +62,31 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
   const viewSeq = useRef(0);
   /** Conversation currently on screen, readable from stale closures. */
   const viewConvId = useRef<string | null>(null);
-  /** Conversations with a turn this tab is still streaming. */
-  const inFlight = useRef(new Set<string>());
+  /**
+   * Turns this tab is streaming, counted per conversation.
+   *
+   * A count rather than a set: `beginView` clears `streaming`, so switching away
+   * and back lets a second turn start in a conversation whose first is still
+   * running. With a set, whichever finished first released the id for both, and
+   * the survivor's question read as settled. It degraded safely — a fresh
+   * question is inside the grace window either way — but only by luck.
+   */
+  const inFlight = useRef(new Map<string, number>());
+
+  const retainInFlight = useCallback((id: string) => {
+    inFlight.current.set(id, (inFlight.current.get(id) ?? 0) + 1);
+  }, []);
+
+  const releaseInFlight = useCallback((id: string) => {
+    const next = (inFlight.current.get(id) ?? 1) - 1;
+    if (next > 0) inFlight.current.set(id, next);
+    else inFlight.current.delete(id);
+  }, []);
+
+  /** Pending re-read for a gap this tab can't be told about. */
+  const gapTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => () => clearTimeout(gapTimer.current), []);
 
   const showConversation = useCallback((id: string | null) => {
     viewConvId.current = id;
@@ -70,6 +95,7 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
 
   /** Switch what the transcript is showing; invalidates anything in flight. */
   const beginView = useCallback(() => {
+    clearTimeout(gapTimer.current);
     setStreaming(false);
     return ++viewSeq.current;
   }, []);
@@ -136,7 +162,22 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
           citations: Array.isArray(m.citations) ? (m.citations as Citation[]) : undefined,
           actions: Array.isArray(m.tool_calls) ? (m.tool_calls as AgentAction[]) : undefined,
         }));
-        setMessages(withGapMarkers(loaded, inFlight.current.has(id)));
+        const owned = (inFlight.current.get(id) ?? 0) > 0;
+        const withGaps = withGapMarkers(loaded, owned);
+        setMessages(withGaps);
+
+        // The tab that owns the turn re-reads from `finishTurn`. Any other tab
+        // has no completion signal, so it schedules one re-read for the moment
+        // the gap must have settled.
+        clearTimeout(gapTimer.current);
+        if (!owned) {
+          const settlesIn = msUntilGapSettles(withGaps);
+          if (settlesIn !== null) {
+            gapTimer.current = setTimeout(() => {
+              if (seq === viewSeq.current) void loadConversation(id);
+            }, settlesIn + 1_000);
+          }
+        }
       } catch {
         if (seq === viewSeq.current) {
           setLoadError({ id, message: "Couldn't reach the server." });
@@ -193,15 +234,16 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
     // Known up front for an existing conversation; for a new one it arrives
     // with the opening frame.
     let turnConvId = conversationId;
-    if (turnConvId) inFlight.current.add(turnConvId);
+    if (turnConvId) retainInFlight(turnConvId);
 
     const assistantId = newId();
     let assistantAdded = false;
+    let metaSeen = false;
     let finished = false;
     const finishTurn = () => {
       if (finished) return;
       finished = true;
-      if (turnConvId) inFlight.current.delete(turnConvId);
+      if (turnConvId) releaseInFlight(turnConvId);
       void refreshConversations();
       if (current()) {
         setStreaming(false);
@@ -223,9 +265,16 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
       if (!res.ok || !res.body) {
         const err = await res.json().catch(() => ({ error: "Request failed" }));
         if (!current()) return;
+        // Marked like every other failure. An unmarked bubble was a third
+        // failure shape: grey, no retry, and invisible to `isFailedTurn`.
         setMessages((prev) => [
           ...prev,
-          { id: assistantId, role: "assistant", content: `⚠️ ${err.error ?? "Request failed"}` },
+          {
+            id: assistantId,
+            role: "assistant",
+            content: String(err.error ?? "Request failed"),
+            actions: [{ name: TURN_FAILED, ok: false }],
+          },
         ]);
         return;
       }
@@ -234,8 +283,13 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
         onStart: (cid) => {
           // Tracked even when the view has moved on: `finishTurn` needs to know
           // which conversation to release and possibly re-read.
-          turnConvId = cid;
-          inFlight.current.add(cid);
+          // A new conversation's id only arrives here, so the retain that
+          // `sendMessage` could not do up front happens now.
+          if (turnConvId !== cid) {
+            if (turnConvId) releaseInFlight(turnConvId);
+            turnConvId = cid;
+            retainInFlight(cid);
+          }
           if (!current()) return;
           showConversation(cid);
           setMessages((prev) => [...prev, { id: assistantId, role: "assistant", content: "" }]);
@@ -254,6 +308,7 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
         // bookkeeping the user is not waiting for, so release the UI here rather
         // than at close — that wait was the full memory-extraction tail (P0-5).
         onMeta: (meta) => {
+          metaSeen = true;
           if (current()) {
             updateMessage(assistantId, (m) => ({
               ...m,
@@ -265,11 +320,23 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
         },
       });
     } catch {
-      if (current() && !assistantAdded) {
-        setMessages((prev) => [
-          ...prev,
-          { id: assistantId, role: "assistant", content: "⚠️ Something went wrong." },
-        ]);
+      if (current()) {
+        if (!assistantAdded) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: assistantId,
+              role: "assistant",
+              content: "Something went wrong while answering.",
+              actions: [{ name: TURN_FAILED, ok: false }],
+            },
+          ]);
+        } else if (!metaSeen) {
+          // The stream died after the first token. Without this the partial
+          // answer sits there looking finished — a reload would catch it, this
+          // path would not. The text stays (it may be useful) but is labelled.
+          updateMessage(assistantId, (m) => ({ ...m, truncated: true }));
+        }
       }
     } finally {
       // Idempotent backstop: a turn that dies before its trailer (network drop,
@@ -427,7 +494,22 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
                         </button>
                       </>
                     ) : m.content ? (
-                      <AnswerBody content={m.content} citations={m.citations} />
+                      <>
+                        <AnswerBody content={m.content} citations={m.citations} />
+                        {m.truncated && (
+                          <div className="mt-2 border-t border-amber-300 pt-2 text-xs text-amber-800 dark:border-amber-900 dark:text-amber-300">
+                            <p>The connection dropped before this answer finished.</p>
+                            <button
+                              type="button"
+                              onClick={() => retryFrom(m.id)}
+                              disabled={streaming}
+                              className="mt-1 rounded-md border border-amber-400 px-2 py-1 font-medium hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:hover:bg-amber-900/40"
+                            >
+                              Retry
+                            </button>
+                          </div>
+                        )}
+                      </>
                     ) : (
                       (streaming && "…") || ""
                     )}
