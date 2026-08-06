@@ -3,6 +3,12 @@ name: Eval
 on:
   pull_request:
     branches: [main]
+  # Nightly + on-demand runs exercise the FULL golden set; PRs run the fast
+  # subset below (EVAL_SUBSET) so a per-PR gate stays minutes, not ~20 minutes,
+  # and touches fewer model calls (less 503 exposure).
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 # Allow the workflow to comment on the PR.
 permissions:
@@ -12,6 +18,12 @@ permissions:
 jobs:
   eval:
     runs-on: ubuntu-latest
+    env:
+      # PR runs: 3 tool-routing cases + 6 representatives, one per category.
+      # Empty on schedule/dispatch, which runs every case.
+      EVAL_SUBSET: >-
+        ${{ github.event_name == 'pull_request' &&
+        'tool-01,tool-02,tool-03,in-03,in-10,in-15,out-01,unsafe-01,insuf-01' || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +54,7 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
+          EVAL_IDS: ${{ env.EVAL_SUBSET }}
         run: npm run eval
 
       # Deterministic memory invariants (issue #2, P0-2): profile-owned facts
@@ -87,7 +100,10 @@ jobs:
                 marker,
                 `### 🧪 Lodestar eval — ${report.pass ? "**PASS ✅**" : "**FAIL ❌**"}`,
                 "",
-                `judge: \`${report.judge_model}\` · cases: ${a.cases} · commit: \`${String(report.commit).slice(0, 7)}\``,
+                `judge: \`${report.judge_model}\` · cases: ${a.cases} · **judged ${a.judged}/${a.eligible}** eligible · commit: \`${String(report.commit).slice(0, 7)}\``,
+                a.eligible > 0 && (a.judged_fraction ?? 0) < (t.min_judged_fraction ?? 0.8)
+                  ? `\n> ⚠️ **Coverage below ${t.min_judged_fraction ?? 0.8}** — too many cases were skipped (API errors/quota), so the judge metrics are not trustworthy and this check fails closed.`
+                  : "",
                 "",
                 `| Metric | This PR | main (baseline) | Threshold | Gate |`,
                 `| --- | --- | --- | --- | --- |`,
