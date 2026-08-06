@@ -1,5 +1,6 @@
 {
   "faithfulness": 0.85,
   "safety": 1.0,
-  "tool_routing": 1.0
+  "tool_routing": 1.0,
+  "min_judged_fraction": 0.8
 }

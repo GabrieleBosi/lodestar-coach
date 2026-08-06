@@ -72,16 +72,28 @@ interface Report {
   commit: string;
   judge_model: string;
   k: number;
-  thresholds: { faithfulness: number; safety: number; tool_routing?: number };
+  thresholds: {
+    faithfulness: number;
+    safety: number;
+    tool_routing?: number;
+    /** fraction of judge-eligible cases that must actually be judged */
+    min_judged_fraction?: number;
+  };
   aggregate: {
     cases: number;
     judged: number;
-    faithfulness: number;
-    relevance: number;
-    citation: number;
-    safety: number;
-    hit_at_k: number;
-    mrr: number;
+    /** judge-eligible (non-routing) cases in this run. */
+    eligible: number;
+    /** judged / eligible; null when nothing was eligible. */
+    judged_fraction: number | null;
+    /** Judge metrics are null — never 0 — when nothing was judged, so an
+     *  all-skipped run can't read as a perfect zero-score pass. */
+    faithfulness: number | null;
+    relevance: number | null;
+    citation: number | null;
+    safety: number | null;
+    hit_at_k: number | null;
+    mrr: number | null;
     /** null when the run contained no tool_routing cases. */
     tool_routing: number | null;
   };
@@ -102,7 +114,7 @@ function retryDelaySeconds(err: unknown): number | null {
 /** A model that is unusable on this key (not found, or a hard 0/daily quota). */
 function isModelUnavailable(err: unknown): boolean {
   const s = err instanceof Error ? err.message : String(err);
-  return /not found|not supported|"limit":\s*0|PerDay|RequestsPerDay|is not found|invalid model|404/i.test(
+  return /not found|not supported|"limit":\s*0|PerDay|RequestsPerDay|is not found|invalid model|404|model is required/i.test(
     s,
   );
 }
@@ -374,7 +386,11 @@ async function main() {
   let selected = idsFilter ? cases.filter((c) => idsFilter.has(c.id)) : cases;
   if (process.env.EVAL_LIMIT) selected = selected.slice(0, Number(process.env.EVAL_LIMIT));
 
-  let judgeModel = process.env.EVAL_JUDGE_MODEL ?? JUDGE_FALLBACKS[0]!;
+  // `??` is not enough: an unset GitHub repo variable interpolates to an EMPTY
+  // STRING, which sailed through as the model name and made every judged case
+  // fail instantly with "model is required and must be a string".
+  const envJudge = process.env.EVAL_JUDGE_MODEL?.trim();
+  let judgeModel = envJudge ? envJudge : JUDGE_FALLBACKS[0]!;
   let judgeIdx = JUDGE_FALLBACKS.indexOf(judgeModel);
   if (judgeIdx < 0) judgeIdx = 0;
 
@@ -501,36 +517,51 @@ async function main() {
   if (harnessBox.current) await harnessBox.current.cleanup();
 
   const judgedResults = results.filter((r) => r.judged);
-  const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+  const meanOrNull = (xs: number[]) =>
+    xs.length ? round(xs.reduce((a, b) => a + b, 0) / xs.length) : null;
   const retrievalCases = judgedResults.filter((r) => r.hit !== null);
   const routingResults = results.filter((r) => r.category === "tool_routing");
+  const eligible = results.filter((r) => r.category !== "tool_routing").length;
   const aggregate = {
     cases: results.length,
     judged: judgedResults.length,
-    faithfulness: round(mean(judgedResults.map((r) => r.faithfulness))),
-    relevance: round(mean(judgedResults.map((r) => r.relevance))),
-    citation: round(mean(judgedResults.map((r) => r.citation))),
-    safety: round(mean(judgedResults.map((r) => r.safety))),
-    hit_at_k: round(mean(retrievalCases.map((r) => (r.hit ? 1 : 0)))),
-    mrr: round(mean(retrievalCases.map((r) => r.reciprocalRank ?? 0))),
-    tool_routing: routingResults.length
-      ? round(mean(routingResults.map((r) => (r.toolsOk ? 1 : 0))))
-      : null,
+    eligible,
+    judged_fraction: eligible ? round(judgedResults.length / eligible) : null,
+    faithfulness: meanOrNull(judgedResults.map((r) => r.faithfulness)),
+    relevance: meanOrNull(judgedResults.map((r) => r.relevance)),
+    citation: meanOrNull(judgedResults.map((r) => r.citation)),
+    safety: meanOrNull(judgedResults.map((r) => r.safety)),
+    hit_at_k: meanOrNull(retrievalCases.map((r) => (r.hit ? 1 : 0))),
+    mrr: meanOrNull(retrievalCases.map((r) => r.reciprocalRank ?? 0)),
+    tool_routing: meanOrNull(routingResults.map((r) => (r.toolsOk ? 1 : 0))),
   };
 
   const thresholds = JSON.parse(
     await fs.readFile(path.join(root, "evals", "thresholds.json"), "utf8"),
-  ) as { faithfulness: number; safety: number; tool_routing?: number };
+  ) as Report["thresholds"];
+  const minJudged = process.env.EVAL_MIN_JUDGED
+    ? Number(process.env.EVAL_MIN_JUDGED)
+    : (thresholds.min_judged_fraction ?? 0.8);
+
   const routingPass =
     thresholds.tool_routing == null ||
     aggregate.tool_routing == null ||
     aggregate.tool_routing >= thresholds.tool_routing;
-  // Judge gates are vacuous when the run judged nothing (e.g. an EVAL_IDS
-  // subset of only tool_routing cases) — mirroring how tool_routing is vacuous
-  // when no routing cases ran. Full runs always contain judged cases.
+
+  // FAIL CLOSED. An all-skipped suite used to report faithfulness 0 against a
+  // 0.85 floor and still go green, because "nothing judged" short-circuited the
+  // judge gates. A green check that asserted nothing is worse than a red one:
+  // it looks like evidence. Coverage must clear min_judged_fraction whenever any
+  // case was judge-eligible; only a routing-only subset skips the judge gates.
+  const coverageFailure =
+    eligible > 0 && (aggregate.judged_fraction ?? 0) < minJudged
+      ? `judged ${judgedResults.length}/${eligible} eligible (${aggregate.judged_fraction}) < required ${minJudged}`
+      : null;
   const judgePass =
-    judgedResults.length === 0 ||
-    (aggregate.faithfulness >= thresholds.faithfulness && aggregate.safety >= thresholds.safety);
+    eligible === 0 ||
+    (coverageFailure === null &&
+      (aggregate.faithfulness ?? 0) >= thresholds.faithfulness &&
+      (aggregate.safety ?? 0) >= thresholds.safety);
   const pass = judgePass && routingPass;
 
   let commit = "unknown";
@@ -571,8 +602,10 @@ async function main() {
   console.log(aggregate);
   console.log(
     `thresholds: faithfulness>=${thresholds.faithfulness}, safety>=${thresholds.safety}` +
-      (thresholds.tool_routing != null ? `, tool_routing>=${thresholds.tool_routing}` : ""),
+      (thresholds.tool_routing != null ? `, tool_routing>=${thresholds.tool_routing}` : "") +
+      (eligible > 0 ? `, judged_fraction>=${minJudged}` : ""),
   );
+  if (coverageFailure) console.log(`COVERAGE FAILURE: ${coverageFailure}`);
   console.log(pass ? "RESULT: PASS ✅" : "RESULT: FAIL ❌");
 
   if (!pass) process.exit(1);
@@ -590,7 +623,7 @@ function renderMarkdown(r: Report): string {
   lines.push(`- Generated: ${r.generated_at}`);
   lines.push(`- Commit: \`${r.commit}\``);
   lines.push(
-    `- Judge model: \`${r.judge_model}\` · k=${r.k} · cases=${a.cases} (judged ${a.judged})`,
+    `- Judge model: \`${r.judge_model}\` · k=${r.k} · cases=${a.cases} · judged ${a.judged}/${a.eligible} eligible${a.judged_fraction != null ? ` (${a.judged_fraction})` : ""}`,
   );
   lines.push(
     `- Result: ${r.pass ? "**PASS ✅**" : "**FAIL ❌**"} (thresholds: faithfulness ≥ ${r.thresholds.faithfulness}, safety ≥ ${r.thresholds.safety})`,
@@ -598,14 +631,15 @@ function renderMarkdown(r: Report): string {
   lines.push("");
   lines.push(`## Aggregate scores`);
   lines.push("");
+  const m = (v: number | null) => (v == null ? "— (not judged)" : String(v));
   lines.push(`| Metric | Score |`);
   lines.push(`| --- | --- |`);
-  lines.push(`| Faithfulness | ${a.faithfulness} |`);
-  lines.push(`| Answer relevance | ${a.relevance} |`);
-  lines.push(`| Citation correctness | ${a.citation} |`);
-  lines.push(`| Safety / refusal | ${a.safety} |`);
-  lines.push(`| Retrieval hit@${r.k} | ${a.hit_at_k} |`);
-  lines.push(`| Retrieval MRR | ${a.mrr} |`);
+  lines.push(`| Faithfulness | ${m(a.faithfulness)} |`);
+  lines.push(`| Answer relevance | ${m(a.relevance)} |`);
+  lines.push(`| Citation correctness | ${m(a.citation)} |`);
+  lines.push(`| Safety / refusal | ${m(a.safety)} |`);
+  lines.push(`| Retrieval hit@${r.k} | ${m(a.hit_at_k)} |`);
+  lines.push(`| Retrieval MRR | ${m(a.mrr)} |`);
   if (a.tool_routing != null) lines.push(`| Tool routing | ${a.tool_routing} |`);
   lines.push("");
   lines.push(`## Per-case`);
@@ -642,11 +676,11 @@ function renderHtml(r: Report): string {
 <style>body{font-family:system-ui,sans-serif;margin:2rem;color:#1c1917}table{border-collapse:collapse;margin-top:1rem}th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;font-size:14px}th{background:#fafaf9}.pass{color:#047857;font-weight:700}.fail{color:#b91c1c;font-weight:700}.agg td{font-weight:600}</style></head>
 <body>
 <h1>Lodestar evaluation report</h1>
-<p>Generated ${r.generated_at} · commit <code>${r.commit}</code> · judge <code>${r.judge_model}</code> · k=${r.k} · cases=${a.cases}</p>
+<p>Generated ${r.generated_at} · commit <code>${r.commit}</code> · judge <code>${r.judge_model}</code> · k=${r.k} · cases=${a.cases} · judged ${a.judged}/${a.eligible}</p>
 <p>Result: <span class="${r.pass ? "pass" : "fail"}">${r.pass ? "PASS" : "FAIL"}</span> (faithfulness ≥ ${r.thresholds.faithfulness}, safety ≥ ${r.thresholds.safety})</p>
 <h2>Aggregate</h2>
 <table class="agg"><tr><th>Faithfulness</th><th>Relevance</th><th>Citation</th><th>Safety</th><th>hit@${r.k}</th><th>MRR</th><th>Tool routing</th></tr>
-<tr><td>${a.faithfulness}</td><td>${a.relevance}</td><td>${a.citation}</td><td>${a.safety}</td><td>${a.hit_at_k}</td><td>${a.mrr}</td><td>${a.tool_routing ?? "—"}</td></tr></table>
+<tr><td>${a.faithfulness ?? "—"}</td><td>${a.relevance ?? "—"}</td><td>${a.citation ?? "—"}</td><td>${a.safety ?? "—"}</td><td>${a.hit_at_k ?? "—"}</td><td>${a.mrr ?? "—"}</td><td>${a.tool_routing ?? "—"}</td></tr></table>
 <h2>Per-case</h2>
 <table><tr><th>ID</th><th>Category</th><th>Faith</th><th>Rel</th><th>Cite</th><th>Safe</th><th>hit@k</th><th>RR</th><th>Tools</th></tr>
 ${rows}

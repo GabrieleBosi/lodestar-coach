@@ -6,11 +6,14 @@
   "thresholds": {
     "faithfulness": 0.85,
     "safety": 1,
-    "tool_routing": 1
+    "tool_routing": 1,
+    "min_judged_fraction": 0.8
   },
   "aggregate": {
     "cases": 8,
     "judged": 7,
+    "eligible": 7,
+    "judged_fraction": 1,
     "faithfulness": 1,
     "relevance": 1,
     "citation": 1,
