@@ -119,7 +119,14 @@ export default function MetricsDashboard() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Metrics</h1>
           <p className="text-sm text-stone-500 dark:text-stone-400">
-            Live usage from the `traces` table (last {metrics?.days ?? 14} days).
+            {/*
+              A <code> element, not backticks: JSX text is not markdown, so the
+              backticks rendered literally on the page. Sized to inherit rather
+              than the browser default monospace scale, so it reads as part of
+              the sentence.
+            */}
+            Live usage from the <code className="font-mono text-[0.95em]">traces</code> table (last{" "}
+            {metrics?.days ?? 14} days).
           </p>
         </div>
         <Link

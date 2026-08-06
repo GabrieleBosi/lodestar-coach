@@ -9,6 +9,12 @@ on:
   # cheap and use no model quota, so they run on every pull request regardless
   # of base. (eval.yml stays pinned to main on purpose — see the note there.)
   pull_request:
+  # Re-run without pushing. During a multi-hour Actions incident on 2026-08-06,
+  # main@ec0ed06 and main@c271ecb received zero check runs and main's combined
+  # status stayed `pending` — with no way to re-verify main short of an empty
+  # commit. eval.yml already had this; ci.yml is the cheap one, so it has less
+  # excuse not to.
+  workflow_dispatch:
 
 jobs:
   build:
