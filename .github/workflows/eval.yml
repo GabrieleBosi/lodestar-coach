@@ -104,6 +104,15 @@ jobs:
                 a.eligible > 0 && (a.judged_fraction ?? 0) < (t.min_judged_fraction ?? 0.8)
                   ? `\n> ⚠️ **Coverage below ${t.min_judged_fraction ?? 0.8}** — too many cases were skipped (API errors/quota), so the judge metrics are not trustworthy and this check fails closed.`
                   : "",
+                Object.entries(a.categories || {}).some(([, c]) => c.eligible > 0 && c.judged === 0)
+                  ? `\n> ⚠️ **A category went unmeasured:** ${Object.entries(a.categories).filter(([, c]) => c.eligible > 0 && c.judged === 0).map(([n, c]) => `${n} ${c.judged}/${c.eligible}`).join(", ")}. Its thresholds would be enforced over nothing, so this check fails closed.`
+                  : "",
+                report.judge_downgraded
+                  ? `\n> ⚠️ **Judge downgraded** to \`${report.judge_model}\` (asked for \`${report.judge_model_intended}\`) — faithfulness/safety are not comparable with runs judged by the intended model.`
+                  : "",
+                a.categories
+                  ? `\nper-category judged: ${Object.entries(a.categories).map(([n, c]) => `${n} ${c.judged}/${c.eligible}`).join(" · ")}`
+                  : "",
                 "",
                 `| Metric | This PR | main (baseline) | Threshold | Gate |`,
                 `| --- | --- | --- | --- | --- |`,

@@ -70,7 +70,12 @@ interface CaseResult extends JudgeScores {
 interface Report {
   generated_at: string;
   commit: string;
+  /** the judge that actually scored this run (may be a fallback) */
   judge_model: string;
+  /** the judge we asked for — scores are only comparable run-to-run when these
+   *  match, since the fallback chain can silently swap in a weaker model. */
+  judge_model_intended: string;
+  judge_downgraded: boolean;
   k: number;
   thresholds: {
     faithfulness: number;
@@ -96,6 +101,9 @@ interface Report {
     mrr: number | null;
     /** null when the run contained no tool_routing cases. */
     tool_routing: number | null;
+    /** per-category eligible/judged counts — aggregate coverage alone can be
+     *  satisfied while a whole category (e.g. unsafe) goes unmeasured. */
+    categories: Record<string, { eligible: number; judged: number }>;
   };
   pass: boolean;
   cases: CaseResult[];
@@ -125,13 +133,30 @@ function isTransient(err: unknown): boolean {
   return /429|503|RESOURCE_EXHAUSTED|UNAVAILABLE|overloaded/i.test(s);
 }
 
+/**
+ * Total backoff a single case may burn before giving up. Wall-clock is dominated
+ * by the retry ladder, not the case count: an unbounded 2+4+8+16+32s ladder cost
+ * ~62s per failing case, so a bad API day made the run slow AND red. Capping the
+ * budget lets a case that recovers on attempt 2–3 still recover, while a case
+ * that is simply not going to work gives up fast and is reported by coverage.
+ */
+const MAX_BACKOFF_TOTAL_MS = Number(process.env.EVAL_MAX_BACKOFF_MS ?? 20_000);
+
 async function withRetry<T>(fn: () => Promise<T>, label: string, maxAttempts = 6): Promise<T> {
+  let spent = 0;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await fn();
     } catch (err) {
       if (attempt === maxAttempts || !isTransient(err)) throw err;
       const wait = Math.min((retryDelaySeconds(err) ?? 2 ** attempt) * 1000, 65_000);
+      if (spent + wait > MAX_BACKOFF_TOTAL_MS) {
+        console.log(
+          `  [${label}] transient error; backoff budget spent (${Math.round(spent / 1000)}s) — giving up`,
+        );
+        throw err;
+      }
+      spent += wait;
       console.log(
         `  [${label}] transient error; retry ${attempt}/${maxAttempts} in ${Math.round(wait / 1000)}s`,
       );
@@ -390,7 +415,8 @@ async function main() {
   // STRING, which sailed through as the model name and made every judged case
   // fail instantly with "model is required and must be a string".
   const envJudge = process.env.EVAL_JUDGE_MODEL?.trim();
-  let judgeModel = envJudge ? envJudge : JUDGE_FALLBACKS[0]!;
+  const judgeModelIntended = envJudge ? envJudge : JUDGE_FALLBACKS[0]!;
+  let judgeModel = judgeModelIntended;
   let judgeIdx = JUDGE_FALLBACKS.indexOf(judgeModel);
   if (judgeIdx < 0) judgeIdx = 0;
 
@@ -534,6 +560,14 @@ async function main() {
     hit_at_k: meanOrNull(retrievalCases.map((r) => (r.hit ? 1 : 0))),
     mrr: meanOrNull(retrievalCases.map((r) => r.reciprocalRank ?? 0)),
     tool_routing: meanOrNull(routingResults.map((r) => (r.toolsOk ? 1 : 0))),
+    categories: results
+      .filter((r) => r.category !== "tool_routing")
+      .reduce<Record<string, { eligible: number; judged: number }>>((acc, r) => {
+        const c = (acc[r.category] ??= { eligible: 0, judged: 0 });
+        c.eligible++;
+        if (r.judged) c.judged++;
+        return acc;
+      }, {}),
   };
 
   const thresholds = JSON.parse(
@@ -553,10 +587,20 @@ async function main() {
   // judge gates. A green check that asserted nothing is worse than a red one:
   // it looks like evidence. Coverage must clear min_judged_fraction whenever any
   // case was judge-eligible; only a routing-only subset skips the judge gates.
+  // Aggregate coverage is necessary but not sufficient: with 6 eligible cases
+  // and a 0.8 floor you can lose one and still pass — and if the one you lose is
+  // the only unsafe case, `safety >= 1.0` is then enforced over zero unsafe
+  // prompts. Every category present in the run must contribute a judged case.
+  const starvedCategories = Object.entries(aggregate.categories)
+    .filter(([, c]) => c.eligible > 0 && c.judged === 0)
+    .map(([name, c]) => `${name} (0/${c.eligible})`);
+
   const coverageFailure =
     eligible > 0 && (aggregate.judged_fraction ?? 0) < minJudged
       ? `judged ${judgedResults.length}/${eligible} eligible (${aggregate.judged_fraction}) < required ${minJudged}`
-      : null;
+      : starvedCategories.length > 0
+        ? `no judged case in category: ${starvedCategories.join(", ")} — those thresholds would be enforced over nothing`
+        : null;
   const judgePass =
     eligible === 0 ||
     (coverageFailure === null &&
@@ -575,6 +619,8 @@ async function main() {
     generated_at: new Date().toISOString(),
     commit,
     judge_model: judgeModel,
+    judge_model_intended: judgeModelIntended,
+    judge_downgraded: judgeModel !== judgeModelIntended,
     k: K,
     thresholds,
     aggregate,
@@ -606,6 +652,12 @@ async function main() {
       (eligible > 0 ? `, judged_fraction>=${minJudged}` : ""),
   );
   if (coverageFailure) console.log(`COVERAGE FAILURE: ${coverageFailure}`);
+  if (judgeModel !== judgeModelIntended) {
+    console.log(
+      `JUDGE DOWNGRADED: asked for ${judgeModelIntended}, scored with ${judgeModel} — ` +
+        `faithfulness/safety are not comparable against runs judged by ${judgeModelIntended}.`,
+    );
+  }
   console.log(pass ? "RESULT: PASS ✅" : "RESULT: FAIL ❌");
 
   if (!pass) process.exit(1);
@@ -623,8 +675,12 @@ function renderMarkdown(r: Report): string {
   lines.push(`- Generated: ${r.generated_at}`);
   lines.push(`- Commit: \`${r.commit}\``);
   lines.push(
-    `- Judge model: \`${r.judge_model}\` · k=${r.k} · cases=${a.cases} · judged ${a.judged}/${a.eligible} eligible${a.judged_fraction != null ? ` (${a.judged_fraction})` : ""}`,
+    `- Judge model: \`${r.judge_model}\`${r.judge_downgraded ? ` ⚠️ **downgraded** from \`${r.judge_model_intended}\` — scores not comparable across runs` : ""} · k=${r.k} · cases=${a.cases} · judged ${a.judged}/${a.eligible} eligible${a.judged_fraction != null ? ` (${a.judged_fraction})` : ""}`,
   );
+  const cats = Object.entries(a.categories ?? {})
+    .map(([n, c]) => `${n} ${c.judged}/${c.eligible}`)
+    .join(" · ");
+  if (cats) lines.push(`- Per-category judged: ${cats}`);
   lines.push(
     `- Result: ${r.pass ? "**PASS ✅**" : "**FAIL ❌**"} (thresholds: faithfulness ≥ ${r.thresholds.faithfulness}, safety ≥ ${r.thresholds.safety})`,
   );
