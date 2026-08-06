@@ -363,21 +363,46 @@ const updateProfile: AgentTool = {
       return { data: { updated: [] }, summary: "update_profile → nothing to update" };
     }
     if (ctx.profileReadOnly) {
+      // Not framed as an error: an error reads as retryable, and the model then
+      // re-attempted the write on later, unrelated turns. This is terminal.
       return {
         data: {
-          error:
-            "The shared demo profile is read-only. Sign in to save your own profile; for now, ask the user to state their numbers in the conversation.",
+          saved: false,
+          terminal: true,
+          reason:
+            "This shared demo profile cannot be modified. Tell the user their details will not be saved in the demo and that signing in enables a personal profile. Do not attempt update_profile again in this conversation.",
         },
-        summary: "update_profile → refused (demo profile is read-only)",
+        summary: "update_profile → not saved (demo profile is read-only)",
+      };
+    }
+
+    // Only write fields that actually differ. A restated value from earlier in
+    // the conversation then costs nothing and reports honestly as "no change",
+    // instead of a misleading write chip.
+    const { data: current } = await ctx.supabase
+      .from("profiles")
+      .select("weight_kg, height_cm, age, sex, activity_level, goals, display_name")
+      .eq("id", ctx.userId)
+      .maybeSingle();
+
+    const changed = entries.filter(([k, v]) => {
+      const existing = (current ?? {})[k as keyof typeof current];
+      return existing == null || String(existing) !== String(v);
+    });
+
+    if (changed.length === 0) {
+      return {
+        data: { updated: [], unchanged: entries.map(([k]) => k) },
+        summary: `update_profile → no change (${entries.map(([k]) => k).join(", ")} already current)`,
       };
     }
 
     const { error } = await ctx.supabase
       .from("profiles")
-      .upsert({ id: ctx.userId, ...Object.fromEntries(entries) }, { onConflict: "id" });
+      .upsert({ id: ctx.userId, ...Object.fromEntries(changed) }, { onConflict: "id" });
     if (error) throw new Error(error.message);
 
-    const updated = entries.map(([k]) => k);
+    const updated = changed.map(([k]) => k);
     return {
       data: { updated },
       summary: `update_profile(${updated.join(", ")})`,
