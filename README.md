@@ -42,7 +42,9 @@ product with tracing, cost controls and a public demo.
   little fails rather than passing on an empty average.
 - **Turn-state integrity** — a turn that fails, or whose serverless function is killed,
   renders as an unanswered turn with a retry rather than as an ordinary conversation.
-  That was a measured 17% of production conversations before the fix.
+  Measured in the project database: **14 of 70 conversations (20%) ended with an
+  unanswered question before the fix, and 0 of 24 since**. That is a single-user dataset
+  dominated by our own testing, so it sizes the bug rather than measuring production.
 - **Production polish** — request **tracing**, an admin **metrics dashboard**,
   **embedding caching**, a **rate limit** on the public demo, graceful **degradation**,
   and a no-signup **demo**.
@@ -84,22 +86,26 @@ each with the evidence that produced it and what would reverse it.
 33 cases across five categories (in-scope, out-of-scope, unsafe, insufficient-context,
 tool-routing) — and blocks regressions in CI.
 
-The table below is the **last run that reached quorum**: commit `332b926`, judge
-`gemini-2.5-flash`, 7 cases judged (see [`evals/report.md`](evals/report.md)).
-
-> ⚠️ **These numbers do not describe `main` today.** That run predates the tool-routing
-> fix and used a fallback judge, so it is the published baseline, not a current
-> measurement. PR deltas stay suppressed until it is re-judged. Presenting it as current
-> would be exactly the failure the harness exists to catch.
+Latest run — commit `c2fbe28`, the **nine-case PR subset** (three tool-routing cases plus
+one representative per category), with all 6 judge-eligible cases judged and every
+category covered:
 
 | Metric               | Score    | Threshold |
 | -------------------- | -------- | --------- |
 | **Faithfulness**     | **1.00** | ≥ 0.85 ✅ |
 | **Safety / refusal** | **1.00** | = 1.0 ✅  |
+| **Tool routing**     | **1.00** | = 1.0 ✅  |
+| **Judged fraction**  | **1.00** | ≥ 0.80 ✅ |
 | Answer relevance     | 1.00     | —         |
 | Citation correctness | 1.00     | —         |
 | Retrieval hit@6      | 1.00     | —         |
 | Retrieval MRR        | 1.00     | —         |
+
+> **The judge was downgraded on this run.** It asked for `gemini-3.1-pro` and scored with
+> `gemini-3.5-flash`, which the harness records because scores from different judges are
+> not comparable. A pull request runs the subset above; the **full 33-case set** runs
+> nightly. `evals/baseline.json` still holds an older run judged by a different model, so
+> PR deltas stay suppressed until it is re-judged.
 
 Thresholds live in [`evals/thresholds.json`](evals/thresholds.json) and are enforced
 fail-closed: fewer than 80% of judge-eligible cases actually judged, or any category with
@@ -246,8 +252,9 @@ status report rather than a retrospective.
   scripts. `check:stream` and `check:gaps` need no credentials and run in CI;
   `check:cache`, `eval` and `eval:memory` need real keys and are manual.
 - **The eval baseline is stale.** `evals/baseline.json` predates the tool-routing fix and
-  was judged by a fallback model, so PR deltas are suppressed until it is re-judged. It is
-  the same run quoted under [Evaluation results](#evaluation-results).
+  was judged by a different model, so PR deltas are suppressed until it is re-judged. The
+  run quoted under [Evaluation results](#evaluation-results) is current but is the
+  nine-case PR subset, not the full set.
 - **The knowledge base is a seed set.** 11 documents. A predictable question outside it —
   "is creatine safe?" — correctly returns a refusal rather than an answer, which is the
   right behaviour but a coverage gap.

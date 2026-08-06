@@ -3,10 +3,12 @@
  *
  * The server persists a row for a turn it *knows* failed, but it cannot persist
  * one for a turn that was never allowed to finish: a killed serverless function
- * leaves no catch to run. Measured in production, 15 of 86 conversations end
- * with an unanswered question (17%), all predating any failure-row code — and
- * one of them rendered as a perfectly ordinary conversation. So the gap is
- * detected from the transcript rather than trusted to exist as a row (#2, P0-4).
+ * leaves no catch to run. Counted in the project database: 14 of 70
+ * conversations ended with an unanswered question before this shipped (20%),
+ * and 0 of 24 since. All 14 predate any failure-row code, so they are killed
+ * functions, and one rendered as a perfectly ordinary conversation. So the gap
+ * is detected from the transcript rather than trusted to exist as a row
+ * (#2, P0-4). Single-user data — it sizes the bug, it doesn't measure production.
  *
  * Pure and separate from the component so it can be checked directly
  * (`npm run check:gaps`).

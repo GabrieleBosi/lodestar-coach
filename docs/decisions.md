@@ -176,12 +176,21 @@ success. Separately, `runAgent` degrades rather than throwing, so the catch is
 rare; the common orphan is the killed function, which no server-side write can
 cover. That is why detection is duplicated on load.
 
-**Measured, not inferred.** In production, **15 of 86 conversations end with an
-unanswered question** (17%; 2 of the owner's 9; most recent 2026-08-05 14:42
-UTC). All 15 predate any failure-row code, so they are killed functions — which
-makes the on-load detector the load-bearing half of this fix and the catch-path
-row the smaller one. One of the 15 rendered as a perfectly ordinary conversation
-in the authenticated app.
+**Measured, not inferred.** Counted in the project database after the fix
+shipped: **14 of 70 conversations ended with an unanswered question before it
+(20%), and 0 of 24 since.** By turn rather than conversation, 15 of 105 (14.3%);
+all-time by conversation, 14 of 94 (14.9%). No assistant row has empty content,
+so every one of these is a missing row rather than a blank answer.
+
+All 14 predate any failure-row code, so they are killed functions — which makes
+the on-load detector the load-bearing half of this fix and the catch-path row the
+smaller one. One of them rendered as a perfectly ordinary conversation in the
+authenticated app.
+
+The figure sizes the bug; it does not measure production. This is single-user
+data dominated by our own testing, and the before/after split is the honest form
+of the claim — an earlier "17% of production conversations" did not reproduce
+against the database and has been withdrawn.
 
 **Consequences of not aborting.** A healthy turn now leaves a question with no
 answer row for its whole duration, so "no answer row" cannot mean "failed" on

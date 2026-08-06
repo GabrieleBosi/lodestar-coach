@@ -3,11 +3,12 @@
  *
  * Guards issue #2 P0-4. A turn whose function was killed leaves a question with
  * no answer row, and nothing server-side can write one after the fact — so the
- * client has to notice. Production had 15 such conversations out of 86, one of
- * which rendered as an ordinary conversation with no indication anything was
- * missing. The failure mode this protects against is a gap that reads as
- * success, so the checks below assert what gets *marked*, not just that
- * something was inserted.
+ * client has to notice. 14 of 70 conversations ended this way before the fix and
+ * 0 of 24 since, in a single-user database — enough to size the bug, not to
+ * measure production. One of the 14 rendered as an ordinary conversation with no
+ * indication anything was missing. The failure mode this guards against is a gap
+ * that reads as success, so the checks below assert what gets *marked*, not just
+ * that something was inserted.
  *
  * Pure function, no network, no credentials, no model quota.
  */
