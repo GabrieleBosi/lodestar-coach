@@ -43,17 +43,50 @@ function BarChart({ data, label }: { data: { label: string; value: number }[]; l
       {data.length === 0 ? (
         <p className="text-xs text-stone-500">No data yet.</p>
       ) : (
+        // A three-column grid, not a flex row. The row used to be
+        // `w-20 shrink-0` for the label with no overflow handling, so a name
+        // longer than 80px — `compute_energy_targets` is 22 characters — spilled
+        // out of its box and rendered underneath the bar and the value, leaving
+        // neither readable. The bar's percentage also resolved against the whole
+        // row rather than the space left over, so it competed with the label and
+        // the value for width. Measured on the real chart (408px wide at a
+        // 1536px viewport, production tool counts): the longest bar asked for
+        // the full 408px and flexbox shrank it back to the 292.6px actually
+        // left, so every bar over-reported by a constant 408/292.6 = 1.39x —
+        // search_knowledge is 34.5% of the max and rendered at 48.1% of the
+        // longest bar, get_history 21.8% at 30.5%, compute_energy_targets 4.4%
+        // at 6.1%.
+        //
+        // Grid columns cannot overlap, the label column truncates rather than
+        // spilling, and the bar sits inside a track that owns exactly the
+        // remaining space, so `value / max` is the fraction of that track.
+        //
+        // The value column is `minmax(3.5rem,auto)` rather than `auto` because
+        // each row is its own grid: an auto column sized to each row's own digit
+        // count, so the 1fr tracks differed by up to 13px between rows and bars
+        // drifted by up to 1pp against each other. 3.5rem clears the widest
+        // realistic value (`146,549` at text-xs tabular-nums) and falls back to
+        // auto beyond it. Measured after: every track 192px, spread 0.00px.
         <ul className="space-y-1">
           {data.map((d) => (
-            <li key={d.label} className="flex items-center gap-2 text-xs">
-              <span className="w-20 shrink-0 text-stone-500">{d.label}</span>
+            <li
+              key={d.label}
+              className="grid grid-cols-[minmax(0,9rem)_1fr_minmax(3.5rem,auto)] items-center gap-2 text-xs"
+            >
+              <span className="truncate text-stone-500" title={d.label}>
+                {d.label}
+              </span>
               <span
-                className="h-4 rounded bg-emerald-500/80"
-                style={{ width: `${(d.value / max) * 100}%`, minWidth: d.value ? "2px" : "0" }}
+                className="h-4 w-full"
                 role="img"
                 aria-label={`${d.label}: ${formatCount(d.value)}`}
-              />
-              <span className="tabular-nums text-stone-600 dark:text-stone-300">
+              >
+                <span
+                  className="block h-full rounded bg-emerald-500/80"
+                  style={{ width: `${(d.value / max) * 100}%`, minWidth: d.value ? "2px" : "0" }}
+                />
+              </span>
+              <span className="text-right tabular-nums text-stone-600 dark:text-stone-300">
                 {formatCount(d.value)}
               </span>
             </li>
