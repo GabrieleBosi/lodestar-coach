@@ -262,7 +262,12 @@ treat "fixed in the chat client" as unfinished until the demo is checked too.
 **Decision.** Record that the repository has **no required status checks**, so
 GitHub's "All checks have passed" reports on whichever checks happened to run,
 not on the checks that are supposed to run. Until branch protection names `build`
-and `Eval` as required, read the check list rather than the badge.
+and `eval` as required, read the check list rather than the badge.
+
+Those are the **job** names, which is what a required-status-check context
+matches — not the workflow names (`CI`, `Eval`). An earlier version of this entry
+said `Eval`, which would have sent anyone configuring it looking for a context
+that does not exist.
 
 **Evidence.** During a GitHub Actions incident on 2026-08-06, six workflow runs
 failed before executing a single step — `Failed to resolve action download info`
@@ -280,6 +285,6 @@ result" are the same colour, and the aggregate badge is the thing doing the
 laundering.
 
 **What would reverse it.** Configuring branch protection on `main` with `build`
-and `Eval` required. That is a repository setting rather than a code change, so
+and `eval` required. That is a repository setting rather than a code change, so
 it cannot be made in a pull request; until it is set, this entry is the record
 that the badge is not load-bearing.

@@ -4,7 +4,10 @@
 
 🔗 **[Live demo (no signup)](https://lodestar-coach.netlify.app/demo)** · 🏠 [Landing](https://lodestar-coach.netlify.app) · 📐 [Architecture](docs/architecture.md) · 🧭 [Decision log](docs/decisions.md)
 
-![Lodestar demo](docs/img/demo.gif)
+![Lodestar interface, illustrated](docs/img/demo.gif)
+
+<sub>An animated illustration of the interface, not a screen recording — the
+[live demo](https://lodestar-coach.netlify.app/demo) is the accurate view.</sub>
 
 > **Disclaimer:** Lodestar provides general, evidence-based information and is **NOT medical advice**.
 
@@ -117,11 +120,16 @@ no judged case at all, fails the run rather than averaging over whatever survive
 > downgraded, and always writes a report. Point `EVAL_JUDGE_MODEL` at a `pro` model on a
 > paid key for the full suite.
 
-## Screenshots
+## Interface diagrams
 
-| Grounded, cited chat       | Admin metrics dashboard          |
-| -------------------------- | -------------------------------- |
-| ![Chat](docs/img/chat.svg) | ![Metrics](docs/img/metrics.svg) |
+These are **hand-drawn diagrams, not screenshots** — they lay out the structure of
+each surface and are drawn light-on-light, while the product follows the viewer's
+colour scheme. Treat them as annotated wireframes; the
+[live demo](https://lodestar-coach.netlify.app/demo) is the accurate view.
+
+| Grounded, cited chat                      | Admin metrics dashboard                         |
+| ----------------------------------------- | ----------------------------------------------- |
+| ![Chat layout diagram](docs/img/chat.svg) | ![Metrics layout diagram](docs/img/metrics.svg) |
 
 ## Tech stack
 
@@ -250,7 +258,7 @@ status report rather than a retrospective.
   them is the real fix; until then, a change to one is a change to both.
 - **No required status checks.** GitHub reports "All checks have passed" over
   whichever checks reported, so during an Actions outage a pull request can show green
-  on its deploy checks alone while `build` and `Eval` never ran — and `main` can carry
+  on its deploy checks alone while `build` and `eval` never ran — and `main` can carry
   commits no workflow ever verified. Same shape as the eval gate's old
   zero-cases-passes bug, one level up. See
   [decision 7](docs/decisions.md#7--a-green-pull-request-is-not-a-green-build).
