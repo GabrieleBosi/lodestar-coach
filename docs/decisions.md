@@ -176,12 +176,21 @@ success. Separately, `runAgent` degrades rather than throwing, so the catch is
 rare; the common orphan is the killed function, which no server-side write can
 cover. That is why detection is duplicated on load.
 
-**Measured, not inferred.** In production, **15 of 86 conversations end with an
-unanswered question** (17%; 2 of the owner's 9; most recent 2026-08-05 14:42
-UTC). All 15 predate any failure-row code, so they are killed functions — which
-makes the on-load detector the load-bearing half of this fix and the catch-path
-row the smaller one. One of the 15 rendered as a perfectly ordinary conversation
-in the authenticated app.
+**Measured, not inferred.** Counted in the project database after the fix
+shipped: **14 of 70 conversations ended with an unanswered question before it
+(20%), and 0 of 24 since.** By turn rather than conversation, 15 of 105 (14.3%);
+all-time by conversation, 14 of 94 (14.9%). No assistant row has empty content,
+so every one of these is a missing row rather than a blank answer.
+
+All 14 predate any failure-row code, so they are killed functions — which makes
+the on-load detector the load-bearing half of this fix and the catch-path row the
+smaller one. One of them rendered as a perfectly ordinary conversation in the
+authenticated app.
+
+The figure sizes the bug; it does not measure production. This is single-user
+data dominated by our own testing, and the before/after split is the honest form
+of the claim — an earlier "17% of production conversations" did not reproduce
+against the database and has been withdrawn.
 
 **Consequences of not aborting.** A healthy turn now leaves a question with no
 answer row for its whole duration, so "no answer row" cannot mean "failed" on
@@ -202,3 +211,39 @@ why the gap detector runs at every position rather than only the last.
 status column ([#8](https://github.com/GabrieleBosi/lodestar-coach/issues/8))
 would make the row the source of truth from the start, and the transcript
 heuristic could go.
+
+---
+
+## 6 · The two chat clients are duplicated, and the demo is the one that gets missed
+
+**Decision.** Record the duplication as a known defect rather than let it keep
+producing bugs quietly, and share what can be shared today —
+`readTurnStream`, `TURN_FAILED`/`isFailedTurn`, `AnswerBody`, `groupCitedSources`
+and `lib/limits.ts` — while the turn lifecycle itself stays duplicated.
+
+**Alternatives considered.**
+
+- _Consolidate `ChatWorkspace` and `DemoChat` into one component now._ Rejected
+  for the moment, not on principle: they genuinely differ (auth, persistence,
+  a sidebar, conversation URLs, gap detection) and merging them inside a bug-fix
+  PR would put a large refactor underneath changes that need to be reviewable
+  line by line. It is the right fix; it is not this PR's fix.
+- _Accept the duplication and review more carefully._ Rejected by evidence.
+  Three separate fixes — the composer bound, trailer-aware failure handling, and
+  citation source grouping — were each written once, shipped, reviewed, and
+  found later to have landed in the authenticated client only.
+
+**Evidence.** Every instance broke the same way and in the same direction. The
+authenticated path is where the work is done, so it is where the fix lands; the
+demo is the page a stranger sees first, so it is where the omission costs most.
+The composer case is the sharpest: `app/api/demo/chat/route.ts` had enforced a
+length bound all along while the field above it had none — the exact asymmetry
+that had just been called out and fixed for `/api/chat`, inverted.
+
+Reviewing the _diff_ cannot catch this class of defect, because the diff is
+correct in isolation. It was caught by reading the live DOM of the deployed
+demo, which is the only view that shows what a visitor actually gets.
+
+**What would reverse it.** Consolidating the two into a shared turn component,
+after which this entry describes history rather than a live risk. Until then,
+treat "fixed in the chat client" as unfinished until the demo is checked too.

@@ -5,7 +5,7 @@ A deeper look at how Lodestar is built. For the overview, see the
 
 ## Data model (Supabase / Postgres + pgvector)
 
-Ten tables under Row-Level Security, all with uuid PKs and `created_at`/`updated_at`:
+Eleven tables under Row-Level Security, all with uuid PKs and `created_at`/`updated_at`:
 
 - `profiles` (1:1 with `auth.users`), `workouts`, `nutrition_logs`, `conversations`,
   `messages`, `memories`, `traces`, `eval_runs`, plus the RAG tables `documents` and
@@ -63,7 +63,7 @@ agent variant (`AGENT_SYSTEM_PROMPT`) adds tool-use and safety guidance.
 
 **Tools** (`lib/agent/tools.ts`): `search_knowledge` (hybrid retrieval + citation
 accumulation), `log_workout`, `log_nutrition`, `get_history` (time-series over the user's
-own logs), `compute_energy_targets`.
+own logs), `compute_energy_targets`, `update_profile`.
 
 **Streaming** (`lib/agent/chat.ts`): an opening JSON line (`conversationId`) goes out
 immediately, then answer tokens as they are generated, then a `�META:{…}�` trailer with
@@ -98,8 +98,9 @@ context — so a preference stated in one session is recalled in the next.
 
 `evals/run.ts` (`npm run eval`):
 
-- **Dataset** (`evals/dataset.jsonl`) — 30 golden cases across the four categories, each with
-  expected sources, an ideal answer, and a `must_refuse` flag.
+- **Dataset** (`evals/dataset.jsonl`) — 33 golden cases across five categories, each with
+  expected sources, an ideal answer, and a `must_refuse` flag; `tool_routing` cases add
+  `expected_tools`/`forbidden_tools` and run through `streamTurn`, not `runAgent`.
 - **Retrieval metrics** — hit@k (a correct source in the top-k?) and MRR (reciprocal rank of
   the first correct source).
 - **Generation metrics** — each grounded answer is scored 0–1 by an **LLM-as-judge**

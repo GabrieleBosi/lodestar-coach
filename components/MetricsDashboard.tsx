@@ -12,6 +12,17 @@ interface Metrics {
   retrieval: { searches: number; hits: number; hitRate: number };
 }
 
+/**
+ * Locale-independent formatting.
+ *
+ * `toLocaleString()` uses the *viewer's* locale, so 63705 tokens rendered as
+ * "63.705" next to a "$0.0292" cost — the same page reading as both European
+ * and US number formatting, where "63.705" looks like a decimal (issue #2, P1).
+ * Costs were also inconsistent between the summary (4 dp) and the table (5 dp).
+ */
+const formatCount = (n: number) => n.toLocaleString("en-US");
+const formatUsd = (n: number) => `$${n.toFixed(4)}`;
+
 function Card({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="rounded-xl border border-stone-200 p-4 dark:border-stone-800">
@@ -40,9 +51,11 @@ function BarChart({ data, label }: { data: { label: string; value: number }[]; l
                 className="h-4 rounded bg-emerald-500/80"
                 style={{ width: `${(d.value / max) * 100}%`, minWidth: d.value ? "2px" : "0" }}
                 role="img"
-                aria-label={`${d.label}: ${d.value}`}
+                aria-label={`${d.label}: ${formatCount(d.value)}`}
               />
-              <span className="tabular-nums text-stone-600 dark:text-stone-300">{d.value}</span>
+              <span className="tabular-nums text-stone-600 dark:text-stone-300">
+                {formatCount(d.value)}
+              </span>
             </li>
           ))}
         </ul>
@@ -50,17 +63,6 @@ function BarChart({ data, label }: { data: { label: string; value: number }[]; l
     </div>
   );
 }
-
-/**
- * Locale-independent formatting.
- *
- * `toLocaleString()` uses the *viewer's* locale, so 63705 tokens rendered as
- * "63.705" next to a "$0.0292" cost — the same page reading as both European
- * and US number formatting, where "63.705" looks like a decimal (issue #2, P1).
- * Costs were also inconsistent between the summary (4 dp) and the table (5 dp).
- */
-const formatCount = (n: number) => n.toLocaleString("en-US");
-const formatUsd = (n: number) => `$${n.toFixed(4)}`;
 
 export default function MetricsDashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
