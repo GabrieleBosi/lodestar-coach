@@ -56,6 +56,36 @@ export function citedSources(text: string, citations: Citation[] | undefined): C
   return citations.filter((c) => used.has(c.n));
 }
 
+export interface SourceGroup {
+  key: string;
+  title: string;
+  sourceUrl: string | null;
+  /** Citation numbers pointing at this document, with the section each hit. */
+  entries: { n: number; heading: string | null }[];
+}
+
+/**
+ * Cited sources collapsed to one entry per document.
+ *
+ * Retrieval returns chunks, and several chunks of one document are still one
+ * source — listing them separately made a single file appear as `[1][2][3][4][5]`,
+ * which reads like five independent citations supporting the claim (issue #2,
+ * P1). Grouping is by URL where there is one, else by title, so two documents
+ * that happen to share a title stay distinct.
+ */
+export function groupCitedSources(text: string, citations: Citation[] | undefined): SourceGroup[] {
+  const groups = new Map<string, SourceGroup>();
+  for (const c of citedSources(text, citations)) {
+    const title = c.title ?? "Source";
+    const key = c.sourceUrl ?? `title:${title}`;
+    const group = groups.get(key) ?? { key, title, sourceUrl: c.sourceUrl, entries: [] };
+    group.entries.push({ n: c.n, heading: c.heading });
+    groups.set(key, group);
+  }
+  for (const g of groups.values()) g.entries.sort((a, b) => a.n - b.n);
+  return [...groups.values()].sort((a, b) => (a.entries[0]?.n ?? 0) - (b.entries[0]?.n ?? 0));
+}
+
 /** Elements whose text is not prose and must not be rewritten. */
 const OPAQUE = new Set(["code", "pre", "a"]);
 

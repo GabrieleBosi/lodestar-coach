@@ -51,6 +51,17 @@ function BarChart({ data, label }: { data: { label: string; value: number }[]; l
   );
 }
 
+/**
+ * Locale-independent formatting.
+ *
+ * `toLocaleString()` uses the *viewer's* locale, so 63705 tokens rendered as
+ * "63.705" next to a "$0.0292" cost — the same page reading as both European
+ * and US number formatting, where "63.705" looks like a decimal (issue #2, P1).
+ * Costs were also inconsistent between the summary (4 dp) and the table (5 dp).
+ */
+const formatCount = (n: number) => n.toLocaleString("en-US");
+const formatUsd = (n: number) => `$${n.toFixed(4)}`;
+
 export default function MetricsDashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [error, setError] = useState("");
@@ -92,8 +103,8 @@ export default function MetricsDashboard() {
         <div className="space-y-8">
           <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Card label="Requests" value={String(metrics.totals.requests)} />
-            <Card label="Tokens" value={metrics.totals.tokens.toLocaleString()} />
-            <Card label="Est. cost" value={`$${metrics.totals.costUsd.toFixed(4)}`} />
+            <Card label="Tokens" value={formatCount(metrics.totals.tokens)} />
+            <Card label="Est. cost" value={formatUsd(metrics.totals.costUsd)} />
             <Card
               label="Latency"
               value={`${(metrics.latency.p50 / 1000).toFixed(1)}s`}
@@ -142,8 +153,8 @@ export default function MetricsDashboard() {
                   <tr key={d.date} className="border-t border-stone-200 dark:border-stone-800">
                     <td className="py-1">{d.date}</td>
                     <td className="tabular-nums">{d.requests}</td>
-                    <td className="tabular-nums">{d.tokens.toLocaleString()}</td>
-                    <td className="tabular-nums">${d.costUsd.toFixed(5)}</td>
+                    <td className="tabular-nums">{formatCount(d.tokens)}</td>
+                    <td className="tabular-nums">{formatUsd(d.costUsd)}</td>
                   </tr>
                 ))}
                 {metrics.byDay.length === 0 && (

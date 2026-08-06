@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import AnswerBody, { type Citation, citedSources } from "@/components/chat/AnswerBody";
+import AnswerBody, { type Citation, groupCitedSources } from "@/components/chat/AnswerBody";
 import SignOutButton from "@/components/SignOutButton";
 import { isFailedTurn, readTurnStream, TURN_FAILED } from "@/lib/chat-stream";
+import { MAX_MESSAGE_LEN } from "@/lib/limits";
 import { msUntilGapSettles, withGapMarkers } from "@/lib/turn-gaps";
 
 interface AgentAction {
@@ -35,19 +36,52 @@ interface ConversationSummary {
   updated_at: string;
 }
 
+/**
+ * What actually went wrong, when the server didn't say.
+ *
+ * Every failure used to read "⚠ Something went wrong." — a rate limit, an
+ * expired session and a 500 were indistinguishable, so the user couldn't tell
+ * whether waiting, signing in again, or retrying was the right move (issue #2,
+ * P1). The server's own message wins when there is one; this is the fallback.
+ */
+function describeHttpFailure(status: number): string {
+  if (status === 401) return "Your session expired. Sign in again to continue.";
+  if (status === 413) return "That question is too long to send.";
+  if (status === 429) return "You're sending messages too quickly. Wait a moment and retry.";
+  if (status >= 500) return "The server had a problem answering. This is usually temporary.";
+  return `The request was rejected (${status}).`;
+}
+
+/** Short, absolute-enough stamp so two rows with the same title are tellable apart. */
+function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const sameDay = new Date().toDateString() === d.toDateString();
+  return sameDay
+    ? d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+}
+
 function newId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
 }
 
-export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
+export default function ChatWorkspace({
+  userEmail,
+  isAdmin = false,
+}: {
+  userEmail: string;
+  isAdmin?: boolean;
+}) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [loadError, setLoadError] = useState<{ id: string; message: string } | null>(null);
+  const [filter, setFilter] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Which view the transcript belongs to. Every async write checks it before
@@ -187,12 +221,55 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
     [beginView, showConversation],
   );
 
-  function startNewChat() {
+  const startNewChat = useCallback(() => {
     beginView();
     showConversation(null);
     setMessages([]);
     setLoadError(null);
     setInput("");
+  }, [beginView, showConversation]);
+
+  /**
+   * Selecting a conversation puts it in the URL.
+   *
+   * Every chat used to live at `/app`, so nothing was linkable and Back did
+   * nothing (issue #2, P1). History is driven directly rather than through the
+   * router: this is a client-side view change, and a router navigation would
+   * re-run the server component to show state the client already holds.
+   */
+  const selectConversation = useCallback(
+    (id: string) => {
+      window.history.pushState(null, "", `/app?c=${id}`);
+      void loadConversation(id);
+    },
+    [loadConversation],
+  );
+
+  const openNewChat = useCallback(() => {
+    window.history.pushState(null, "", "/app");
+    startNewChat();
+  }, [startNewChat]);
+
+  // Deep link on first paint, and Back/Forward between conversations.
+  useEffect(() => {
+    const apply = () => {
+      const id = new URLSearchParams(window.location.search).get("c");
+      if (id) void loadConversation(id);
+      else startNewChat();
+    };
+    apply();
+    window.addEventListener("popstate", apply);
+    return () => window.removeEventListener("popstate", apply);
+  }, [loadConversation, startNewChat]);
+
+  async function deleteConversation(id: string) {
+    const res = await fetch(`/api/conversations?id=${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      setLoadError({ id, message: "Couldn't delete this conversation." });
+      return;
+    }
+    setConversations((prev) => prev.filter((c) => c.id !== id));
+    if (viewConvId.current === id) openNewChat();
   }
 
   async function send() {
@@ -263,7 +340,7 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
       });
 
       if (!res.ok || !res.body) {
-        const err = await res.json().catch(() => ({ error: "Request failed" }));
+        const err = await res.json().catch(() => ({ error: null }));
         if (!current()) return;
         // Marked like every other failure. An unmarked bubble was a third
         // failure shape: grey, no retry, and invisible to `isFailedTurn`.
@@ -272,8 +349,8 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
           {
             id: assistantId,
             role: "assistant",
-            content: String(err.error ?? "Request failed"),
-            actions: [{ name: TURN_FAILED, ok: false }],
+            content: String(err.error ?? describeHttpFailure(res.status)),
+            actions: [{ name: TURN_FAILED, ok: false, error: `HTTP ${res.status}` }],
           },
         ]);
         return;
@@ -292,6 +369,11 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
           }
           if (!current()) return;
           showConversation(cid);
+          // A conversation created by sending becomes linkable immediately,
+          // without adding a history entry the user didn't navigate to.
+          if (new URLSearchParams(window.location.search).get("c") !== cid) {
+            window.history.replaceState(null, "", `/app?c=${cid}`);
+          }
           setMessages((prev) => [...prev, { id: assistantId, role: "assistant", content: "" }]);
           assistantAdded = true;
         },
@@ -327,8 +409,11 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
             {
               id: assistantId,
               role: "assistant",
-              content: "Something went wrong while answering.",
-              actions: [{ name: TURN_FAILED, ok: false }],
+              content:
+                typeof navigator !== "undefined" && navigator.onLine === false
+                  ? "You appear to be offline. The question wasn't sent."
+                  : "Couldn't reach the server. The question may not have been sent.",
+              actions: [{ name: TURN_FAILED, ok: false, error: "network" }],
             },
           ]);
         } else if (!metaSeen) {
@@ -345,9 +430,14 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
     }
   }
 
+  const needle = filter.trim().toLowerCase();
+  const visibleConversations = needle
+    ? conversations.filter((c) => (c.title ?? "").toLowerCase().includes(needle))
+    : conversations;
+
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
   // Only what the answer cites — a refusal retrieves chunks too (P0-7).
-  const sources = citedSources(lastAssistant?.content ?? "", lastAssistant?.citations);
+  const sources = groupCitedSources(lastAssistant?.content ?? "", lastAssistant?.citations);
 
   return (
     <div className="mx-auto flex h-screen max-w-6xl flex-col px-4 py-4">
@@ -369,6 +459,14 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
           >
             Memory
           </Link>
+          {isAdmin && (
+            <Link
+              href="/app/metrics"
+              className="rounded-lg border border-stone-300 px-2.5 py-1.5 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+            >
+              Metrics
+            </Link>
+          )}
           <SignOutButton />
         </nav>
       </header>
@@ -378,24 +476,62 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
         <aside className="hidden min-h-0 flex-col md:flex">
           <button
             type="button"
-            onClick={startNewChat}
-            className="mb-3 rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+            onClick={openNewChat}
+            className="mb-2 rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
           >
             + New chat
           </button>
+          {/*
+            The title is the first question truncated, so asking the same thing
+            twice produces two identical rows. Search and a timestamp are what
+            make them tellable apart; grouping by date belongs to the design
+            pass (issue #2, P1).
+          */}
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Search chats"
+            aria-label="Search conversations"
+            className="mb-2 rounded-md border border-stone-300 bg-white px-2 py-1 text-xs outline-none focus:border-stone-500 dark:border-stone-700 dark:bg-stone-900"
+          />
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
-            {conversations.map((c) => (
-              <button
+            {visibleConversations.length === 0 && (
+              <p className="px-2 py-1.5 text-xs text-stone-400">
+                {conversations.length === 0 ? "No chats yet." : "No chats match that search."}
+              </p>
+            )}
+            {visibleConversations.map((c) => (
+              <div
                 key={c.id}
-                type="button"
-                onClick={() => loadConversation(c.id)}
-                className={`block w-full truncate rounded-md px-2 py-1.5 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800 ${
-                  c.id === conversationId ? "bg-stone-100 font-medium dark:bg-stone-800" : ""
+                className={`group flex items-center gap-1 rounded-md pr-1 hover:bg-stone-100 dark:hover:bg-stone-800 ${
+                  c.id === conversationId ? "bg-stone-100 dark:bg-stone-800" : ""
                 }`}
-                title={c.title ?? "Untitled"}
               >
-                {c.title ?? "Untitled"}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => selectConversation(c.id)}
+                  className="min-w-0 flex-1 px-2 py-1.5 text-left text-sm"
+                  title={c.title ?? "Untitled"}
+                >
+                  <span
+                    className={`block truncate ${c.id === conversationId ? "font-medium" : ""}`}
+                  >
+                    {c.title ?? "Untitled"}
+                  </span>
+                  <span className="block text-[11px] text-stone-500 dark:text-stone-400">
+                    {formatWhen(c.updated_at)}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteConversation(c.id)}
+                  aria-label={`Delete conversation: ${c.title ?? "Untitled"}`}
+                  title="Delete"
+                  className="rounded px-1 text-xs text-stone-400 opacity-0 hover:text-red-600 focus:opacity-100 group-hover:opacity-100 dark:hover:text-red-400"
+                >
+                  ✕
+                </button>
+              </div>
             ))}
           </div>
         </aside>
@@ -416,7 +552,7 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
                   </button>
                   <button
                     type="button"
-                    onClick={startNewChat}
+                    onClick={openNewChat}
                     className="rounded-md border border-stone-300 px-2 py-1 text-xs hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
                   >
                     Start a new chat
@@ -526,12 +662,28 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
             }}
             className="flex gap-2 border-t border-stone-200 p-3 dark:border-stone-800"
           >
-            <input
+            {/*
+              A textarea, not an input: a coaching question routinely runs to
+              several lines, and a single-line field made anything long unusable
+              to review before sending. Enter still sends, Shift+Enter is the
+              newline. `maxLength` mirrors the server's own limit rather than
+              letting the request fail after the fact. Auto-grow is left to the
+              design pass.
+            */}
+            <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="How should I structure a deload week?"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              rows={2}
+              maxLength={MAX_MESSAGE_LEN}
+              placeholder="How should I structure a deload week?  (Shift+Enter for a new line)"
               disabled={streaming}
-              className="flex-1 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none focus:border-stone-500 disabled:opacity-50 dark:border-stone-700 dark:bg-stone-900"
+              className="flex-1 resize-y rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none focus:border-stone-500 disabled:opacity-50 dark:border-stone-700 dark:bg-stone-900"
             />
             <button
               type="submit"
@@ -552,18 +704,29 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
             {sources.length === 0 ? (
               <p className="text-xs text-stone-400">Citations for the latest answer appear here.</p>
             ) : (
-              sources.map((s) => (
-                <div key={s.n} className="text-xs">
-                  <span className="font-semibold">[{s.n}]</span> {s.title ?? "Source"}
-                  {s.heading ? <span className="text-stone-500"> · {s.heading}</span> : null}
-                  {s.sourceUrl ? (
+              sources.map((g) => (
+                <div key={g.key} className="text-xs">
+                  <span className="font-semibold">{g.entries.map((e) => `[${e.n}]`).join("")}</span>{" "}
+                  {g.title}
+                  {g.entries.some((e) => e.heading) && (
+                    <ul className="mt-0.5 ml-3 list-disc text-stone-500 dark:text-stone-400">
+                      {g.entries
+                        .filter((e) => e.heading)
+                        .map((e) => (
+                          <li key={e.n}>
+                            [{e.n}] {e.heading}
+                          </li>
+                        ))}
+                    </ul>
+                  )}
+                  {g.sourceUrl ? (
                     <a
-                      href={s.sourceUrl}
+                      href={g.sourceUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="block truncate text-emerald-700 underline dark:text-emerald-400"
                     >
-                      {s.sourceUrl}
+                      {g.sourceUrl}
                     </a>
                   ) : null}
                 </div>

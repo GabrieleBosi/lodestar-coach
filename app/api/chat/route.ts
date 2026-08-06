@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 
 import { createSupabaseAdminClient } from "@/lib/db/admin";
 import { createSupabaseServerClient } from "@/lib/db/supabase";
+import { MAX_MESSAGE_LEN } from "@/lib/limits";
 import { streamTurn } from "@/lib/agent/chat";
 import { isRateLimited } from "@/lib/agent/ratelimit";
 import { getLLMProvider } from "@/lib/llm";
@@ -53,6 +54,12 @@ export async function POST(request: Request) {
   const conversationId = typeof body.conversationId === "string" ? body.conversationId : null;
   if (!message) {
     return NextResponse.json({ error: "message is required" }, { status: 400 });
+  }
+  if (message.length > MAX_MESSAGE_LEN) {
+    return NextResponse.json(
+      { error: `Message is too long (max ${MAX_MESSAGE_LEN} characters).` },
+      { status: 413 },
+    );
   }
 
   let convoId = conversationId;

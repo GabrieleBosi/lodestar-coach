@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRef, useState } from "react";
 
-import AnswerBody, { type Citation, citedSources } from "@/components/chat/AnswerBody";
+import AnswerBody, { type Citation, groupCitedSources } from "@/components/chat/AnswerBody";
 import { readTurnStream } from "@/lib/chat-stream";
 
 interface AgentAction {
@@ -107,7 +107,7 @@ export default function DemoChat() {
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
   // Only what the answer cites — a refusal retrieves chunks too (P0-7).
-  const sources = citedSources(lastAssistant?.content ?? "", lastAssistant?.citations);
+  const sources = groupCitedSources(lastAssistant?.content ?? "", lastAssistant?.citations);
 
   return (
     <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-6">
@@ -188,20 +188,20 @@ export default function DemoChat() {
         {sources.length > 0 && (
           <div className="border-t border-stone-200 px-4 py-2 text-xs dark:border-stone-800">
             <span className="font-semibold">Sources: </span>
-            {sources.map((s) => (
-              <span key={s.n} className="mr-2">
-                [{s.n}]{" "}
-                {s.sourceUrl ? (
+            {sources.map((g) => (
+              <span key={g.key} className="mr-2">
+                {g.entries.map((e) => `[${e.n}]`).join("")}{" "}
+                {g.sourceUrl ? (
                   <a
-                    href={s.sourceUrl}
+                    href={g.sourceUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-emerald-700 underline dark:text-emerald-400"
                   >
-                    {s.title ?? "source"}
+                    {g.title}
                   </a>
                 ) : (
-                  (s.title ?? "source")
+                  g.title
                 )}
               </span>
             ))}
