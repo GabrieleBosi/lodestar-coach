@@ -31,11 +31,17 @@ export interface TurnHandlers {
   onMeta: (meta: { sources: TurnSource[]; actions: TurnAction[] }) => void;
 }
 
+/** Could this partial segment still turn into the metadata trailer? */
+function couldStartMeta(partial: string): boolean {
+  return partial.startsWith(META) || META.startsWith(partial);
+}
+
 export async function readTurnStream(body: ReadableStream<Uint8Array>, h: TurnHandlers) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let startSeen = false;
+  let afterCtrl = false;
 
   const handleSegment = (segment: string) => {
     if (!segment) return;
@@ -72,16 +78,29 @@ export async function readTurnStream(body: ReadableStream<Uint8Array>, h: TurnHa
 
     const parts = buffer.split(CTRL);
     buffer = parts.pop() ?? "";
+    // The remainder follows a control byte iff this read contained one; with no
+    // CTRL in it the remainder is a continuation of whatever it already was.
+    if (parts.length > 0) afterCtrl = true;
     for (const p of parts) handleSegment(p);
 
-    // Flush text eagerly; only hold back what might be the start of the trailer.
-    if (buffer && !META.startsWith(buffer.slice(0, META.length))) {
+    // Flush text eagerly. The only reason to hold is a control frame that hasn't
+    // been terminated yet — the trailer can be split across reads, and emitting
+    // half of it would print `META:{"sourc` into the answer. Text that merely
+    // starts with "M" is not held, because it doesn't follow a control byte.
+    //
+    // The trailer is terminated on both sides (see `lib/agent/chat.ts`), so this
+    // hold always resolves mid-stream. It previously did not: an unterminated
+    // trailer stayed a plausible prefix forever and rode out to close (P0-5).
+    if (buffer && !(afterCtrl && couldStartMeta(buffer))) {
       h.onText(buffer);
       buffer = "";
+      afterCtrl = false;
     }
 
     if (done) break;
   }
 
-  if (buffer) handleSegment(buffer);
+  // Backstop for a stream that ends mid-frame. `startSeen` guards against
+  // emitting half an opening JSON line as answer text.
+  if (startSeen && buffer) handleSegment(buffer);
 }

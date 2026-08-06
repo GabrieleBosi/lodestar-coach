@@ -65,6 +65,21 @@ export function streamTurn(params: TurnParams): Response {
       const keepalive = setInterval(() => send(CTRL), KEEPALIVE_MS);
 
       const started = Date.now();
+      let metaSent = false;
+      /**
+       * The trailer is the turn-complete signal, so it must be *terminated*.
+       * Without the closing CTRL the client's `buffer.split(CTRL)` leaves it as
+       * the trailing fragment and the prefix-hold heuristic keeps it there until
+       * the stream closes — which made sources and chips wait out the whole tail
+       * no matter what order this function wrote them (issue #2, P0-5).
+       * Guarded by `npm run check:stream`.
+       */
+      const sendMeta = (payload: { sources: unknown; actions: unknown }) => {
+        if (metaSent) return;
+        metaSent = true;
+        send(CTRL + "META:" + JSON.stringify(payload) + CTRL);
+      };
+
       try {
         let personalization = "";
         try {
@@ -100,21 +115,15 @@ export function streamTurn(params: TurnParams): Response {
 
         for (const piece of chunkText(agent.finalText)) send(piece);
 
-        // Trailing metadata: sources/actions are only known once the agent is done.
-        send(
-          CTRL +
-            "META:" +
-            JSON.stringify({
-              sources: agent.citations,
-              actions: agent.actions.map((a) => ({
-                name: a.name,
-                ok: a.ok,
-                summary: a.summary,
-                error: a.error,
-              })),
-            }),
-        );
-
+        // Order matters: persist -> META -> extract -> close.
+        //
+        // META tells the client the turn is complete, so it re-enables the
+        // composer and refetches the sidebar. Both reads want the rows to exist
+        // already, so the writes go first. Memory extraction is a further model
+        // call (~11.7s measured) that nothing on screen waits for, so it goes
+        // after — but still *inside* the stream: work scheduled after
+        // `controller.close()` can be frozen or killed on serverless, which
+        // would drop memories silently.
         await supabase.from("traces").insert({
           request_id: requestId,
           user_id: userId,
@@ -145,14 +154,33 @@ export function streamTurn(params: TurnParams): Response {
           .update({ updated_at: new Date().toISOString() })
           .eq("id", conversationId);
 
+        sendMeta({
+          sources: agent.citations,
+          actions: agent.actions.map((a) => ({
+            name: a.name,
+            ok: a.ok,
+            summary: a.summary,
+            error: a.error,
+          })),
+        });
+
+        // Past the point of no return for the user-visible turn: a memory
+        // failure must not append an error to an answer already on screen.
         if (params.extractMemory) {
-          await extractAndStoreMemories({ supabase, provider, userId }, message, agent.finalText);
+          try {
+            await extractAndStoreMemories({ supabase, provider, userId }, message, agent.finalText);
+          } catch {
+            /* the answer is delivered; losing an extraction is not the user's problem */
+          }
         }
       } catch (err) {
         send(
           "\n\nSomething went wrong while answering. Please try again. " +
             "(This is general information, not medical advice.)",
         );
+        // Complete the turn even on the error path, so the composer unlocks on
+        // the signal rather than on the close-handler backstop.
+        sendMeta({ sources: [], actions: [] });
         await supabase.from("traces").insert({
           request_id: requestId,
           user_id: userId,

@@ -15,7 +15,8 @@
     "query": "tsx scripts/query.ts",
     "eval": "tsx evals/run.ts",
     "eval:memory": "tsx evals/memory_check.ts",
-    "check:cache": "tsx scripts/check-cache.ts"
+    "check:cache": "tsx scripts/check-cache.ts",
+    "check:stream": "tsx scripts/check-stream.ts"
   },
   "dependencies": {
     "@google/genai": "^2.10.0",
@@ -24,6 +25,8 @@
     "next": "^15.5.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "server-only": "^0.0.1",
     "zod": "^4.4.3"
   },
