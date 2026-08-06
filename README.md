@@ -203,8 +203,6 @@ retrospective.
   answer corresponds to a retrieved chunk; the eval measures it after the fact rather than
   the code preventing it. The UI now marks an unmatched `[n]` as unresolved instead of
   rendering it as a working reference, which surfaces the gap without closing it.
-- **The sources list can repeat a document.** Two chunks from the same file appear as two
-  entries with the same title, distinguished only by heading.
 - **The agent loop is Gemini-specific.** Retrieval and embeddings go through the
   `LLMProvider` interface; `lib/agent/loop.ts` depends on Gemini function-calling types.
   Tracked in [#6](https://github.com/GabrieleBosi/lodestar-coach/issues/6).

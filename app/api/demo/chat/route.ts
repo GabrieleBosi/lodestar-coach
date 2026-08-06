@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 
 import { createSupabaseAdminClient } from "@/lib/db/admin";
 import { streamTurn } from "@/lib/agent/chat";
+import { MAX_DEMO_MESSAGE_LEN as MAX_MESSAGE_LEN } from "@/lib/limits";
 import { isRateLimited } from "@/lib/agent/ratelimit";
 import { getLLMProvider } from "@/lib/llm";
 import { EmbeddingCache } from "@/lib/llm/cache";
@@ -18,7 +19,7 @@ export const maxDuration = 60;
 // service-role client, with a GLOBAL rate limit to bound cost/abuse.
 const DEMO_USER_ID = process.env.DEMO_USER_ID ?? "d3f00000-0000-4000-8000-00000000d3f0";
 const DEMO_RATE_LIMIT = Number(process.env.DEMO_RATE_LIMIT ?? 40);
-const MAX_MESSAGE_LEN = 500;
+
 const HISTORY_LIMIT = 8;
 
 export async function POST(request: Request) {

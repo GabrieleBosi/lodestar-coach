@@ -4,6 +4,8 @@ import MetricsDashboard from "@/components/MetricsDashboard";
 import { isAdminEmail } from "@/lib/auth/admin";
 import { createSupabaseServerClient } from "@/lib/db/supabase";
 
+export const metadata = { title: "Metrics" };
+
 // Admin-only metrics dashboard.
 export default async function MetricsPage() {
   const supabase = await createSupabaseServerClient();
