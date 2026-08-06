@@ -5,7 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import AnswerBody, { type Citation, citedSources } from "@/components/chat/AnswerBody";
 import SignOutButton from "@/components/SignOutButton";
-import { isFailedTurn, readTurnStream, TURN_FAILED } from "@/lib/chat-stream";
+import { isFailedTurn, readTurnStream } from "@/lib/chat-stream";
+import { withGapMarkers } from "@/lib/turn-gaps";
 
 interface AgentAction {
   name: string;
@@ -20,6 +21,10 @@ interface ChatMessage {
   content: string;
   citations?: Citation[];
   actions?: AgentAction[];
+  /** Synthesized placeholder for a turn with no assistant row — not persisted. */
+  gap?: "pending" | "failed";
+  /** Server timestamp; only present on loaded rows. */
+  createdAt?: string;
 }
 
 interface ConversationSummary {
@@ -53,6 +58,15 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
   // describes. The turn is already paid for, so it is left to finish and write;
   // the sequence check is what keeps its output out of the wrong conversation.
   const viewSeq = useRef(0);
+  /** Conversation currently on screen, readable from stale closures. */
+  const viewConvId = useRef<string | null>(null);
+  /** Conversations with a turn this tab is still streaming. */
+  const inFlight = useRef(new Set<string>());
+
+  const showConversation = useCallback((id: string | null) => {
+    viewConvId.current = id;
+    setConversationId(id);
+  }, []);
 
   /** Switch what the transcript is showing; invalidates anything in flight. */
   const beginView = useCallback(() => {
@@ -83,7 +97,7 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
   const loadConversation = useCallback(
     async (id: string) => {
       const seq = beginView();
-      setConversationId(id);
+      showConversation(id);
       setMessages([]);
       setLoadError(null);
 
@@ -108,6 +122,7 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
             id: string;
             role: string;
             content: string | null;
+            created_at: string;
             citations: unknown;
             tool_calls: unknown;
           }[];
@@ -117,38 +132,23 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
           id: m.id,
           role: m.role === "assistant" ? "assistant" : "user",
           content: m.content ?? "",
+          createdAt: m.created_at,
           citations: Array.isArray(m.citations) ? (m.citations as Citation[]) : undefined,
           actions: Array.isArray(m.tool_calls) ? (m.tool_calls as AgentAction[]) : undefined,
         }));
-
-        // The server writes a row for a turn it knows failed, but it cannot
-        // write one for a turn that was never allowed to finish — a killed
-        // function leaves no catch to run. A trailing user message is that
-        // case, and rendering it plainly would let a missing reply read as an
-        // ordinary conversation (P0-4). Surfaced here, not persisted: the turn
-        // may still be streaming in another tab, and retrying is harmless.
-        const last = loaded[loaded.length - 1];
-        if (last && last.role === "user") {
-          loaded.push({
-            id: `${last.id}:incomplete`,
-            role: "assistant",
-            content: "This turn didn't finish, so there's no reply saved for it.",
-            actions: [{ name: TURN_FAILED, ok: false }],
-          });
-        }
-        setMessages(loaded);
+        setMessages(withGapMarkers(loaded, inFlight.current.has(id)));
       } catch {
         if (seq === viewSeq.current) {
           setLoadError({ id, message: "Couldn't reach the server." });
         }
       }
     },
-    [beginView],
+    [beginView, showConversation],
   );
 
   function startNewChat() {
     beginView();
-    setConversationId(null);
+    showConversation(null);
     setMessages([]);
     setLoadError(null);
     setInput("");
@@ -156,19 +156,25 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
 
   async function send() {
     const text = input.trim();
-    if (!text) return;
+    // Guard before clearing: correctness of the input's contents shouldn't rest
+    // on the composer's disabled attribute.
+    if (!text || streaming) return;
     setInput("");
     await sendMessage(text);
   }
 
-  /** Re-send the user message that preceded a failed assistant reply. */
-  function retryFrom(assistantId: string) {
-    const idx = messages.findIndex((m) => m.id === assistantId);
+  /**
+   * Re-send the question that went unanswered.
+   *
+   * Nothing is removed. The failed assistant row and the original question stay
+   * in the database, so filtering them out of the live transcript would make it
+   * disagree with what a reload shows. A retry is a new turn, and both views
+   * render it that way: question, gap, question, answer.
+   */
+  function retryFrom(gapId: string) {
+    const idx = messages.findIndex((m) => m.id === gapId);
     const prior = idx > 0 ? messages[idx - 1] : undefined;
     if (!prior || prior.role !== "user") return;
-    // Drop the failed reply and the question it answered; `sendMessage` re-adds
-    // the question, so the transcript reads as one attempt rather than two.
-    setMessages((prev) => prev.filter((m) => m.id !== assistantId && m.id !== prior.id));
     void sendMessage(prior.content);
   }
 
@@ -184,6 +190,10 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
     // dropped rather than appended to whatever is on screen now (P0-3).
     const seq = viewSeq.current;
     const current = () => seq === viewSeq.current;
+    // Known up front for an existing conversation; for a new one it arrives
+    // with the opening frame.
+    let turnConvId = conversationId;
+    if (turnConvId) inFlight.current.add(turnConvId);
 
     const assistantId = newId();
     let assistantAdded = false;
@@ -191,9 +201,16 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
     const finishTurn = () => {
       if (finished) return;
       finished = true;
-      if (!current()) return;
-      setStreaming(false);
+      if (turnConvId) inFlight.current.delete(turnConvId);
       void refreshConversations();
+      if (current()) {
+        setStreaming(false);
+        return;
+      }
+      // The user switched away and came back while this ran. Its output was
+      // dropped as stale, but the row is written now, so re-read it rather than
+      // leave the gap marker sitting over a turn that succeeded.
+      if (turnConvId && turnConvId === viewConvId.current) void loadConversation(turnConvId);
     };
 
     try {
@@ -215,8 +232,12 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
 
       await readTurnStream(res.body, {
         onStart: (cid) => {
+          // Tracked even when the view has moved on: `finishTurn` needs to know
+          // which conversation to release and possibly re-read.
+          turnConvId = cid;
+          inFlight.current.add(cid);
           if (!current()) return;
-          setConversationId(cid);
+          showConversation(cid);
           setMessages((prev) => [...prev, { id: assistantId, role: "assistant", content: "" }]);
           assistantAdded = true;
         },
@@ -343,44 +364,56 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
               </div>
             )}
             {messages.map((m) => {
-              // A turn that failed is persisted as an assistant row so it can't
-              // read as a missing reply on reload (P0-4). It renders as an error
-              // with a retry, never as an answer.
-              const failed = m.role === "assistant" && isFailedTurn(m.actions);
+              // Two ways a turn can lack an answer: the server persisted a row
+              // saying so, or no row exists at all and the gap was detected on
+              // load. Neither may render as an answer (P0-4). A gap that could
+              // still be running gets no retry — a second turn would cost
+              // another generation and duplicate the question.
+              const pending = m.gap === "pending";
+              const failed =
+                m.role === "assistant" && (m.gap === "failed" || isFailedTurn(m.actions));
               return (
                 <div
                   key={m.id}
                   className={m.role === "user" ? "flex justify-end" : "flex flex-col items-start"}
                 >
-                  {m.role === "assistant" && !failed && m.actions && m.actions.length > 0 && (
-                    <div className="mb-1 flex flex-wrap gap-1">
-                      {m.actions.map((a, i) => (
-                        <span
-                          key={i}
-                          title={a.error ?? a.summary ?? a.name}
-                          className={`rounded-full border px-2 py-0.5 text-[11px] ${
-                            a.ok === false
-                              ? "border-red-300 text-red-600 dark:border-red-900 dark:text-red-400"
-                              : "border-stone-300 text-stone-500 dark:border-stone-700 dark:text-stone-400"
-                          }`}
-                        >
-                          {a.ok === false ? "⚠ " : "⚙ "}
-                          {a.summary ?? a.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                  {m.role === "assistant" &&
+                    !failed &&
+                    !pending &&
+                    m.actions &&
+                    m.actions.length > 0 && (
+                      <div className="mb-1 flex flex-wrap gap-1">
+                        {m.actions.map((a, i) => (
+                          <span
+                            key={i}
+                            title={a.error ?? a.summary ?? a.name}
+                            className={`rounded-full border px-2 py-0.5 text-[11px] ${
+                              a.ok === false
+                                ? "border-red-300 text-red-600 dark:border-red-900 dark:text-red-400"
+                                : "border-stone-300 text-stone-500 dark:border-stone-700 dark:text-stone-400"
+                            }`}
+                          >
+                            {a.ok === false ? "⚠ " : "⚙ "}
+                            {a.summary ?? a.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   <div
                     className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
                       m.role === "user"
                         ? "self-end whitespace-pre-wrap bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
                         : failed
                           ? "border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
-                          : "bg-stone-100 text-stone-900 dark:bg-stone-800 dark:text-stone-100"
+                          : pending
+                            ? "border border-stone-300 bg-transparent text-stone-500 dark:border-stone-700 dark:text-stone-400"
+                            : "bg-stone-100 text-stone-900 dark:bg-stone-800 dark:text-stone-100"
                     }`}
                   >
                     {m.role !== "assistant" ? (
                       m.content
+                    ) : pending ? (
+                      <p className="animate-pulse">{m.content}</p>
                     ) : failed ? (
                       <>
                         <p>{m.content || "This turn didn't produce an answer."}</p>

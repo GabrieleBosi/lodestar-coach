@@ -16,7 +16,8 @@
     "eval": "tsx evals/run.ts",
     "eval:memory": "tsx evals/memory_check.ts",
     "check:cache": "tsx scripts/check-cache.ts",
-    "check:stream": "tsx scripts/check-stream.ts"
+    "check:stream": "tsx scripts/check-stream.ts",
+    "check:gaps": "tsx scripts/check-turn-gaps.ts"
   },
   "dependencies": {
     "@google/genai": "^2.10.0",

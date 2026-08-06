@@ -41,6 +41,11 @@ jobs:
       - name: Check stream wire format
         run: npm run check:stream
 
+      # Guards unanswered-turn detection, which is what stops a killed function
+      # from rendering as an ordinary conversation. Pure function, no I/O.
+      - name: Check unanswered-turn detection
+        run: npm run check:gaps
+
       - name: Build
         run: npm run build
         env:

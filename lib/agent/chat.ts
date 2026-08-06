@@ -264,6 +264,13 @@ export function streamTurn(params: TurnParams): Response {
               ] as unknown as Json,
               latency_ms: Date.now() - started,
             });
+            // Same bump a successful turn does: the sidebar orders by this, and
+            // a failed turn that doesn't move it sends the conversation to the
+            // bottom of the list exactly when the user wants to find it again.
+            await supabase
+              .from("conversations")
+              .update({ updated_at: new Date().toISOString() })
+              .eq("id", conversationId);
           } catch (persistErr) {
             await traceFailure("persist_failed_turn", persistErr);
           }

@@ -176,6 +176,29 @@ success. Separately, `runAgent` degrades rather than throwing, so the catch is
 rare; the common orphan is the killed function, which no server-side write can
 cover. That is why detection is duplicated on load.
 
+**Measured, not inferred.** In production, **15 of 86 conversations end with an
+unanswered question** (17%; 2 of the owner's 9; most recent 2026-08-05 14:42
+UTC). All 15 predate any failure-row code, so they are killed functions — which
+makes the on-load detector the load-bearing half of this fix and the catch-path
+row the smaller one. One of the 15 rendered as a perfectly ordinary conversation
+in the authenticated app.
+
+**Consequences of not aborting.** A healthy turn now leaves a question with no
+answer row for its whole duration, so "no answer row" cannot mean "failed" on
+its own. Three things disambiguate it: conversation ids with a turn streaming in
+this tab, the age of the trailing question (a turn is bounded by the agent
+budget plus prelude, and the platform kills the request around 30s), and
+position — only a _trailing_ gap can still be running. A gap that might be live
+renders as "Still working on this…" with no retry, and the conversation is
+re-read when the turn finishes if the view is back on it.
+
+**Retry does not rewrite history.** The failed row and the original question stay
+in the database and a retry appends a new turn, so the transcript reads
+question / gap / question / answer. The live view is not filtered to hide that,
+because a reload cannot hide it — filtering would make the two disagree. This is
+why the gap detector runs at every position rather than only the last.
+
 **What would reverse it.** Moving the turn to a durable queue with its own
-status column would make the row the source of truth from the start, and the
-client-side trailing-user-message heuristic could go.
+status column ([#8](https://github.com/GabrieleBosi/lodestar-coach/issues/8))
+would make the row the source of truth from the start, and the transcript
+heuristic could go.

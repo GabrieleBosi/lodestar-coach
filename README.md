@@ -139,6 +139,7 @@ npm run dev            # → http://localhost:3000
 npm run query -- "how should I structure a deload week?"   # retrieval smoke test
 npm run eval                                               # scored eval report
 npm run check:stream                                       # chat wire-format guard
+npm run check:gaps                                         # unanswered-turn detection guard
 npm run check:cache                                        # embedding-cache guard (needs service role)
 npm run lint && npm run typecheck && npm run build         # CI gates
 ```
@@ -208,9 +209,9 @@ retrospective.
   `LLMProvider` interface; `lib/agent/loop.ts` depends on Gemini function-calling types.
   Tracked in [#6](https://github.com/GabrieleBosi/lodestar-coach/issues/6).
 - **No unit test suite.** Correctness is guarded by the eval harness and by targeted scripts
-  (`npm run eval`, `npm run eval:memory`, `npm run check:stream`, `npm run check:cache`).
-  `check:stream` needs no credentials and runs in CI; `check:cache` needs service-role
-  credentials, so it is a **manual** guard and does not run in CI.
+  (`npm run eval`, `npm run eval:memory`, `npm run check:stream`, `npm run check:gaps`,
+  `npm run check:cache`). `check:stream` and `check:gaps` need no credentials and run in CI;
+  `check:cache` needs service-role credentials, so it is a **manual** guard and does not.
 - **The eval baseline is stale.** `evals/baseline.json` predates the P0-1 fix and was judged
   by a fallback model, so PR deltas are suppressed until it is re-judged. This is the same
   run quoted under [Evaluation results](#evaluation-results) — the scores there are the last
