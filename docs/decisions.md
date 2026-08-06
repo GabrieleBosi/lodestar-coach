@@ -202,3 +202,39 @@ why the gap detector runs at every position rather than only the last.
 status column ([#8](https://github.com/GabrieleBosi/lodestar-coach/issues/8))
 would make the row the source of truth from the start, and the transcript
 heuristic could go.
+
+---
+
+## 6 · The two chat clients are duplicated, and the demo is the one that gets missed
+
+**Decision.** Record the duplication as a known defect rather than let it keep
+producing bugs quietly, and share what can be shared today —
+`readTurnStream`, `TURN_FAILED`/`isFailedTurn`, `AnswerBody`, `groupCitedSources`
+and `lib/limits.ts` — while the turn lifecycle itself stays duplicated.
+
+**Alternatives considered.**
+
+- _Consolidate `ChatWorkspace` and `DemoChat` into one component now._ Rejected
+  for the moment, not on principle: they genuinely differ (auth, persistence,
+  a sidebar, conversation URLs, gap detection) and merging them inside a bug-fix
+  PR would put a large refactor underneath changes that need to be reviewable
+  line by line. It is the right fix; it is not this PR's fix.
+- _Accept the duplication and review more carefully._ Rejected by evidence.
+  Three separate fixes — the composer bound, trailer-aware failure handling, and
+  citation source grouping — were each written once, shipped, reviewed, and
+  found later to have landed in the authenticated client only.
+
+**Evidence.** Every instance broke the same way and in the same direction. The
+authenticated path is where the work is done, so it is where the fix lands; the
+demo is the page a stranger sees first, so it is where the omission costs most.
+The composer case is the sharpest: `app/api/demo/chat/route.ts` had enforced a
+length bound all along while the field above it had none — the exact asymmetry
+that had just been called out and fixed for `/api/chat`, inverted.
+
+Reviewing the _diff_ cannot catch this class of defect, because the diff is
+correct in isolation. It was caught by reading the live DOM of the deployed
+demo, which is the only view that shows what a visitor actually gets.
+
+**What would reverse it.** Consolidating the two into a shared turn component,
+after which this entry describes history rather than a live risk. Until then,
+treat "fixed in the chat client" as unfinished until the demo is checked too.
