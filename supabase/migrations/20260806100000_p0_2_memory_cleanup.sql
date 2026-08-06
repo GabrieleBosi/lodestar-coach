@@ -26,6 +26,14 @@
 -- and the app keeps answering off 51 kg with nothing left to contradict it.
 -- STEP 2 below is written so it physically cannot delete an unreconciled
 -- weight row, even if run blindly.
+--
+-- AUTO-EXECUTION: STEPS 0, 1 and 3 are comments; STEP 2 is live SQL. This file
+-- lives in supabase/migrations/, so `supabase db push` (or any migration run)
+-- executes STEP 2 unattended. That is deliberate and safe: 2a only removes rows
+-- that provably match the profile, and 2b's guard leaves the weight conflict
+-- untouched until a human resolves it in STEP 1. An unattended run therefore
+-- does the uncontested cleanup and stops — it never picks a winner for you.
+-- Both statements are idempotent; re-running deletes nothing new.
 
 -- ── STEP 0 · CONFLICT REPORT (read-only — run this first) ────────────────────
 -- Shows the profile beside every profile-owned memory so you can decide.
@@ -46,17 +54,25 @@
 -- update public.profiles set weight_kg = 62
 -- where id = '88e77c6e-0ef1-4318-a896-86a2576812ba';
 --
--- (b) 51 kg is current (the profile form won) — then nothing to update here,
---     but STEP 2's weight guard will refuse, which is correct: delete the stale
---     'Weighs 62 kg' row explicitly first, acknowledging you discarded it:
+-- (b) 51 kg is current (the profile form won). The profile needs no update, but
+--     STEP 2b's guard will then be false and would leave 'Weighs 51 kg' behind —
+--     a profile-owned weight mirror, i.e. the very bug this migration removes.
+--     So branch (b) retires BOTH weight rows itself, acknowledging that you
+--     discarded the later 62 kg statement. Both branches then converge on one
+--     surviving row and STEP 3 is branch-independent.
 --
 -- delete from public.memories
--- where id = '9ced8de4-e0de-4fa2-84fd-d878b9804a09';
+-- where user_id = '88e77c6e-0ef1-4318-a896-86a2576812ba'
+--   and id in (
+--     'c88d9265-a3b9-4ea1-98c8-2505d8841d4c', -- Weighs 51 kg (now mirrored by the profile)
+--     '9ced8de4-e0de-4fa2-84fd-d878b9804a09'  -- Weighs 62 kg (discarded)
+--   );
 
 -- ── STEP 2 · DELETE (safe to run; self-guarding on weight) ───────────────────
 
--- 2a. The ten profile-owned rows that already agree with the profile, plus the
---     older of the two duplicate squat-PR rows. No conflict, no guard needed.
+-- 2a. Ten ids: the NINE profile-owned rows that already agree with the profile,
+--     plus the older of the two duplicate squat-PR rows. No conflict, no guard
+--     needed. This statement is live (see the header note on auto-execution).
 delete from public.memories
 where user_id = '88e77c6e-0ef1-4318-a896-86a2576812ba'
   and id in (
