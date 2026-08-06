@@ -72,9 +72,14 @@ loop, eval methodology, safety model, and cost design.
 ## Evaluation results
 
 `npm run eval` scores the RAG pipeline against a golden set and blocks regressions in CI.
-Latest run (commit `332b926`, judge `gemini-2.5-flash`, 7 cases judged across all four
-categories — in-scope, out-of-scope, unsafe, insufficient-context; see
-[`evals/report.md`](evals/report.md)):
+
+The scores below are the **last run that reached quorum** — commit `332b926`, judge
+`gemini-2.5-flash`, 7 cases judged across all four categories (in-scope, out-of-scope,
+unsafe, insufficient-context; see [`evals/report.md`](evals/report.md)). That run
+**predates the tool-routing fix** in [#2](https://github.com/GabrieleBosi/lodestar-coach/issues/2)
+and used a fallback judge, so it is the current published baseline rather than a
+measurement of `main` as it stands today; PR deltas are suppressed until it is re-judged.
+Treating it as current would be the same mistake the harness is built to prevent.
 
 | Metric               | Score    | Threshold |
 | -------------------- | -------- | --------- |
@@ -133,6 +138,9 @@ npm run dev            # → http://localhost:3000
 # Handy scripts
 npm run query -- "how should I structure a deload week?"   # retrieval smoke test
 npm run eval                                               # scored eval report
+npm run check:stream                                       # chat wire-format guard
+npm run check:gaps                                         # unanswered-turn detection guard
+npm run check:cache                                        # embedding-cache guard (needs service role)
 npm run lint && npm run typecheck && npm run build         # CI gates
 ```
 
@@ -142,7 +150,7 @@ All environment variables are documented in [`.env.example`](.env.example).
 
 - **Partly provider-agnostic LLM interface.** The RAG and embedding layer depends on an
   `LLMProvider` interface rather than the vendor SDK, so that half is swappable. The **agent
-  loop is not**: `lib/agent/loop.ts` calls `ai.models.generateContent` directly, because it
+  loop is not**: `lib/agent/loop.ts` calls `ai.models.generateContentStream` directly, because it
   depends on Gemini's function-calling types. Routing it through the interface would mean
   generalising those types, so the honest description today is "provider-agnostic retrieval,
   Gemini-specific agent" rather than a clean abstraction throughout.
@@ -163,6 +171,51 @@ All environment variables are documented in [`.env.example`](.env.example).
   a free optimisation, and the cache key can't see the user's logged data.
 - **RLS everywhere.** Users can only read/write their own rows; the service-role key is
   `import "server-only"` so it can never reach the client bundle.
+
+Longer-form reasoning for individual calls — including why generation isn't cached — lives in
+[`docs/decisions.md`](docs/decisions.md).
+
+## Known limitations
+
+Current as of the open work in [#2](https://github.com/GabrieleBosi/lodestar-coach/issues/2).
+Lines come off this list as they're fixed, so its length is a status report rather than a
+retrospective.
+
+- **Time-to-first-token is dominated by everything before the answer.** Answer tokens now
+  stream as they are generated, but the work ahead of them — route prelude, personalization
+  recall, and the retrieval tool step — still runs first. Measured on a local tool-using
+  turn: first token at **9.9s**, last at 13.2s, where the whole answer previously landed at
+  once at 13.2s. The route prelude alone (rate limit, conversation upsert, history fetch,
+  cold start) was **3.9s** of that, and is now recorded as `prelude_ms` on the request trace.
+- **The turn holds the connection open after the answer.** Memory extraction is a further
+  model call — measured at **11.7s** after the answer is already on screen — and it runs
+  before the stream closes, because work scheduled after `controller.close()` can be frozen
+  or killed on serverless and would drop memories silently. The UI no longer waits on it
+  (the metadata trailer completes the turn), but the request does. Moving it to a durable
+  queue is tracked separately.
+- **The embedding cache has no TTL and no eviction.** Rows live forever. Fine at this size,
+  not a managed cache.
+- **The demo rate limit is global.** 40 requests per 10 minutes across _all_ visitors — a
+  cost ceiling, not per-visitor fairness. One visitor can exhaust it for everyone. The
+  limiter also counts `traces` rows, so it **fails open** if a trace insert fails, and it is
+  check-then-act with no lock.
+- **Citations are prompt-enforced, not validated.** Nothing checks that a `[n]` marker in an
+  answer corresponds to a retrieved chunk; the eval measures it after the fact rather than
+  the code preventing it. The UI now marks an unmatched `[n]` as unresolved instead of
+  rendering it as a working reference, which surfaces the gap without closing it.
+- **The sources list can repeat a document.** Two chunks from the same file appear as two
+  entries with the same title, distinguished only by heading.
+- **The agent loop is Gemini-specific.** Retrieval and embeddings go through the
+  `LLMProvider` interface; `lib/agent/loop.ts` depends on Gemini function-calling types.
+  Tracked in [#6](https://github.com/GabrieleBosi/lodestar-coach/issues/6).
+- **No unit test suite.** Correctness is guarded by the eval harness and by targeted scripts
+  (`npm run eval`, `npm run eval:memory`, `npm run check:stream`, `npm run check:gaps`,
+  `npm run check:cache`). `check:stream` and `check:gaps` need no credentials and run in CI;
+  `check:cache` needs service-role credentials, so it is a **manual** guard and does not.
+- **The eval baseline is stale.** `evals/baseline.json` predates the P0-1 fix and was judged
+  by a fallback model, so PR deltas are suppressed until it is re-judged. This is the same
+  run quoted under [Evaluation results](#evaluation-results) — the scores there are the last
+  ones that reached quorum, not a measurement of `main` today.
 
 ## What I'd build next
 

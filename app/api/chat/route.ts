@@ -19,6 +19,7 @@ const HISTORY_LIMIT = 10;
 const RATE_LIMIT_PER_MIN = Number(process.env.CHAT_RATE_LIMIT_PER_MIN ?? 20);
 
 export async function POST(request: Request) {
+  const routeStarted = Date.now();
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
@@ -96,6 +97,7 @@ export async function POST(request: Request) {
   );
 
   return streamTurn({
+    preludeMs: Date.now() - routeStarted,
     supabase,
     provider,
     userId: user.id,

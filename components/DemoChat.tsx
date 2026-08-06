@@ -3,14 +3,9 @@
 import Link from "next/link";
 import { useRef, useState } from "react";
 
+import AnswerBody, { type Citation, citedSources } from "@/components/chat/AnswerBody";
 import { readTurnStream } from "@/lib/chat-stream";
 
-interface Citation {
-  n: number;
-  title: string | null;
-  sourceUrl: string | null;
-  heading: string | null;
-}
 interface AgentAction {
   name: string;
   ok?: boolean;
@@ -51,6 +46,17 @@ export default function DemoChat() {
     setMessages((m) => [...m, { id: newId(), role: "user", content: trimmed }]);
     const assistantId = newId();
     let added = false;
+    let finished = false;
+    // The trailer completes the turn; `finally` is only a backstop for a stream
+    // that dies before sending one (issue #2, P0-5).
+    const finishTurn = () => {
+      if (finished) return;
+      finished = true;
+      setBusy(false);
+      requestAnimationFrame(() =>
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }),
+      );
+    };
 
     try {
       const res = await fetch("/api/demo/chat", {
@@ -76,14 +82,17 @@ export default function DemoChat() {
           setMessages((m) =>
             m.map((x) => (x.id === assistantId ? { ...x, content: x.content + t } : x)),
           ),
-        onMeta: (meta) =>
+        // The step that produced this text turned out to call a tool.
+        onReset: () =>
+          setMessages((m) => m.map((x) => (x.id === assistantId ? { ...x, content: "" } : x))),
+        onMeta: (meta) => {
           setMessages((m) =>
             m.map((x) =>
-              x.id === assistantId
-                ? { ...x, citations: meta.sources, actions: meta.actions }
-                : x,
+              x.id === assistantId ? { ...x, citations: meta.sources, actions: meta.actions } : x,
             ),
-          ),
+          );
+          finishTurn();
+        },
       });
     } catch {
       if (!added)
@@ -92,14 +101,13 @@ export default function DemoChat() {
           { id: assistantId, role: "assistant", content: "⚠️ Something went wrong." },
         ]);
     } finally {
-      setBusy(false);
-      requestAnimationFrame(() =>
-        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }),
-      );
+      finishTurn();
     }
   }
 
-  const sources = [...messages].reverse().find((m) => m.role === "assistant")?.citations ?? [];
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  // Only what the answer cites — a refusal retrieves chunks too (P0-7).
+  const sources = citedSources(lastAssistant?.content ?? "", lastAssistant?.citations);
 
   return (
     <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-6">
@@ -156,13 +164,21 @@ export default function DemoChat() {
                   </div>
                 )}
                 <div
-                  className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2 text-sm ${
+                  className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
                     m.role === "user"
-                      ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
+                      ? "whitespace-pre-wrap bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
                       : "bg-stone-100 text-stone-900 dark:bg-stone-800 dark:text-stone-100"
                   }`}
                 >
-                  {m.content || (busy ? "…" : "")}
+                  {m.role === "assistant" ? (
+                    m.content ? (
+                      <AnswerBody content={m.content} citations={m.citations} />
+                    ) : (
+                      (busy && "…") || ""
+                    )
+                  ) : (
+                    m.content
+                  )}
                 </div>
               </div>
             ))

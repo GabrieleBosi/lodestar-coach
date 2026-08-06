@@ -53,8 +53,9 @@ agent variant (`AGENT_SYSTEM_PROMPT`) adds tool-use and safety guidance.
 
 `lib/agent/loop.ts` runs a manual multi-step loop:
 
-1. `generateContent` with `tools` (function declarations built from each tool's JSON schema)
-   and the system instruction.
+1. `generateContentStream` with `tools` (function declarations built from each tool's JSON
+   schema) and the system instruction. Response parts are kept exactly as received — they
+   carry `thoughtSignature`, which Gemini 3.x requires back on the follow-up turn.
 2. If the response has `functionCalls`, each is **zod-validated**, executed against the
    user's RLS-scoped Supabase client, and its result fed back as a `functionResponse` turn.
    Tool errors are returned to the model (not thrown) so it can recover or explain.
@@ -64,9 +65,14 @@ agent variant (`AGENT_SYSTEM_PROMPT`) adds tool-use and safety guidance.
 accumulation), `log_workout`, `log_nutrition`, `get_history` (time-series over the user's
 own logs), `compute_energy_targets`.
 
-**Streaming**: the request pipeline (`lib/agent/chat.ts`) sends a first JSON meta line
-(`conversationId`, `sources`, `actions`) then streams the answer; the UI renders the
-"actions taken" trace and a sources panel.
+**Streaming** (`lib/agent/chat.ts`): an opening JSON line (`conversationId`) goes out
+immediately, then answer tokens as they are generated, then a `�META:{…}�` trailer with
+sources and actions. The trailer is terminated on both sides and is the **turn-complete**
+signal — the composer unlocks and the sidebar refetches on it, not on the stream close,
+which still has the post-answer memory-extraction tail behind it. A step that emits text
+and then calls a tool is retracted with a `�RESET�` frame, since the loop only keeps the
+text of the step that stops calling tools. Server order is persist → META → extract →
+close; `npm run check:stream` guards the format.
 
 ## Long-term memory
 
@@ -124,11 +130,7 @@ context — so a preference stated in one session is recalled in the next.
   usually misses, because the agent rephrases its own search ("…growth hormone protein
   synthesis" vs "…hypertrophy protein synthesis"). That missing half is structural and can't
   improve without stabilising query generation.
-- **Why generation isn't cached** — it was, and it was mis-keyed with the _embedding_ model,
-  so changing the chat model invalidated nothing (issue #2, P0-8). Caching user-facing
-  coaching answers is a product decision rather than an optimisation, and the key here can't
-  see the user's logged data. If it's wanted later it belongs in the agent loop, keyed over
-  `(model, system, history, message)` with invalidation on user-data writes.
+- **Why generation isn't cached** — see [decision 1](decisions.md#1--generation-is-not-cached-embeddings-are).
 - **Rate limiting & degradation** — model calls are wrapped with a timeout + one retry and
   degrade to a friendly message if Gemini stays unavailable. The limiter
   (`lib/agent/ratelimit.ts`) is a **byproduct of tracing**: it counts `traces` rows for a

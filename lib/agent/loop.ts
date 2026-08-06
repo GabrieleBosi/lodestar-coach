@@ -7,7 +7,7 @@
  * retry; if the model stays unavailable, the agent degrades to a graceful
  * message instead of throwing, so the user always gets a response.
  */
-import { type Content, type FunctionCall, GoogleGenAI } from "@google/genai";
+import { type Content, type FunctionCall, GoogleGenAI, type Part } from "@google/genai";
 
 import type { Json } from "../db/types";
 import { estimateCostUsd, estimateTokens } from "../llm/cost";
@@ -43,6 +43,8 @@ export interface AgentAction {
 
 export interface AgentResult {
   finalText: string;
+  /** True when the caller's sink already forwarded exactly `finalText`. */
+  alreadyStreamed: boolean;
   actions: AgentAction[];
   citations: Citation[];
   tokensIn: number;
@@ -128,25 +130,72 @@ interface ModelCall {
   tokensOut: number;
 }
 
+/**
+ * Where a step's tokens go while it is still being generated.
+ *
+ * A step is only known to be the final answer once its stream ends without a
+ * function call, so tokens are forwarded optimistically and retracted if the
+ * step turns out to call a tool. That text is discarded either way — the loop
+ * only ever keeps the text of the step that stops calling tools — so a retract
+ * costs nothing but a repaint.
+ */
+export interface StreamSink {
+  onToken: (text: string) => void;
+  /** Discard everything forwarded for this turn so far. */
+  onReset: () => void;
+}
+
 async function callModel(
   ai: GoogleGenAI,
   model: string,
   contents: Content[],
   config: Record<string, unknown>,
   ctx: ToolContext,
+  sink?: StreamSink,
 ): Promise<ModelCall> {
   const started = Date.now();
   let lastErr: unknown;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
+    let forwarded = false;
     try {
-      const resp = await withTimeout(
-        ai.models.generateContent({ model, contents, config }),
-        MODEL_TIMEOUT_MS,
-      );
-      const usage = resp.usageMetadata;
+      // The whole step is raced against the timeout, exactly as the unary call
+      // was: streaming doesn't make a hung model any less hung.
+      const consume = (async () => {
+        const stream = await ai.models.generateContentStream({ model, contents, config });
+        const calls: FunctionCall[] = [];
+        // Parts are kept exactly as received. Rebuilding them from accumulated
+        // text and calls drops `thoughtSignature` off functionCall parts, and
+        // Gemini 3.x rejects the follow-up turn with
+        // "Function call is missing a thought_signature in functionCall parts".
+        const parts: Part[] = [];
+        let text = "";
+        let usage: { promptTokenCount?: number; candidatesTokenCount?: number } | undefined;
+
+        for await (const chunk of stream) {
+          for (const part of chunk.candidates?.[0]?.content?.parts ?? []) {
+            parts.push(part);
+            if (part.functionCall) calls.push(part.functionCall);
+            // Thinking parts are not answer text and must never be forwarded.
+            if (part.thought || !part.text) continue;
+            text += part.text;
+            // Stop forwarding the moment this step reveals itself as a tool step.
+            if (sink && calls.length === 0) {
+              sink.onToken(part.text);
+              forwarded = true;
+            }
+          }
+          if (chunk.usageMetadata) usage = chunk.usageMetadata;
+        }
+        return { calls, parts, text, usage };
+      })();
+
+      const { calls, parts, text, usage } = await withTimeout(consume, MODEL_TIMEOUT_MS);
+
+      if (calls.length > 0 && forwarded) sink?.onReset();
+
       const tokensIn = usage?.promptTokenCount ?? estimateTokens(JSON.stringify(contents));
-      const tokensOut = usage?.candidatesTokenCount ?? estimateTokens(resp.text ?? "");
+      const tokensOut = usage?.candidatesTokenCount ?? estimateTokens(text);
       await ctx.supabase.from("traces").insert({
         request_id: ctx.requestId,
         user_id: ctx.userId,
@@ -154,17 +203,26 @@ async function callModel(
         tokens: tokensIn + tokensOut,
         latency_ms: Date.now() - started,
         cost_usd: estimateCostUsd(tokensIn, tokensOut),
-        payload: { model, tokens_in: tokensIn, tokens_out: tokensOut, attempt } as unknown as Json,
+        payload: {
+          model,
+          tokens_in: tokensIn,
+          tokens_out: tokensOut,
+          attempt,
+          streamed: forwarded,
+        } as unknown as Json,
       });
       return {
-        functionCalls: resp.functionCalls ?? [],
-        text: resp.text ?? "",
-        content: resp.candidates?.[0]?.content,
+        functionCalls: calls,
+        text,
+        content: parts.length ? { role: "model", parts } : undefined,
         tokensIn,
         tokensOut,
       };
     } catch (err) {
       lastErr = err;
+      // A retry regenerates from scratch, so anything already on screen from
+      // the failed attempt has to go.
+      if (forwarded) sink?.onReset();
       if (attempt < 2 && isTransient(err)) {
         await sleep(1500);
         continue;
@@ -180,6 +238,8 @@ export async function runAgent(params: {
   system: string;
   history: Content[];
   userMessage: string;
+  /** When supplied, answer tokens are forwarded as they are generated. */
+  sink?: StreamSink;
 }): Promise<AgentResult> {
   const { ctx, system, history, userMessage } = params;
   const cfg = readGeminiConfig();
@@ -209,6 +269,20 @@ export async function runAgent(params: {
   let tokensIn = 0;
   let tokensOut = 0;
 
+  // Mirror of what the client currently has, so the caller can be told whether
+  // the answer still needs sending.
+  let forwarded = "";
+  const sink: StreamSink | undefined = params.sink && {
+    onToken: (t) => {
+      forwarded += t;
+      params.sink?.onToken(t);
+    },
+    onReset: () => {
+      forwarded = "";
+      params.sink?.onReset();
+    },
+  };
+
   const turnStarted = Date.now();
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -226,6 +300,7 @@ export async function runAgent(params: {
           ...THINKING_OFF,
         },
         ctx,
+        sink,
       );
       tokensIn += result.tokensIn;
       tokensOut += result.tokensOut;
@@ -258,6 +333,7 @@ export async function runAgent(params: {
           ...THINKING_OFF,
         },
         ctx,
+        sink,
       );
       tokensIn += result.tokensIn;
       tokensOut += result.tokensOut;
@@ -270,8 +346,18 @@ export async function runAgent(params: {
     finalText = DEGRADED_MESSAGE;
   }
 
+  // The client has the answer already only if what it holds is exactly the
+  // answer. A degraded message, an empty generation, or a retracted step all
+  // land here with a mismatch, and the caller sends the text itself.
+  let alreadyStreamed = false;
+  if (sink) {
+    if (finalText && forwarded === finalText) alreadyStreamed = true;
+    else if (forwarded) sink.onReset();
+  }
+
   return {
     finalText,
+    alreadyStreamed,
     actions,
     citations: ctx.citations,
     tokensIn,

@@ -22,6 +22,7 @@ const MAX_MESSAGE_LEN = 500;
 const HISTORY_LIMIT = 8;
 
 export async function POST(request: Request) {
+  const routeStarted = Date.now();
   const supabase = createSupabaseAdminClient();
 
   if (
@@ -87,6 +88,7 @@ export async function POST(request: Request) {
   const provider = new EmbeddingCache(getLLMProvider(), supabase, cfg.embedModel);
 
   return streamTurn({
+    preludeMs: Date.now() - routeStarted,
     supabase,
     provider,
     userId: DEMO_USER_ID,

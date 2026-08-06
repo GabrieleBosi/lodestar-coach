@@ -35,6 +35,17 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # The only automated guard on the chat wire format. Replays the parser
+      # against synthetic streams — no network, no credentials, no model quota —
+      # so unlike check:cache there is nothing keeping it out of CI.
+      - name: Check stream wire format
+        run: npm run check:stream
+
+      # Guards unanswered-turn detection, which is what stops a killed function
+      # from rendering as an ordinary conversation. Pure function, no I/O.
+      - name: Check unanswered-turn detection
+        run: npm run check:gaps
+
       - name: Build
         run: npm run build
         env:
