@@ -48,6 +48,29 @@ export const FAILED_TEXT = "This turn didn't finish, so there's no reply saved f
  * @param streamingHere this tab is currently streaming a turn for this conversation
  * @param now injectable clock, for checks
  */
+/**
+ * When a pending gap will have settled, in ms from now, or null if none is
+ * pending.
+ *
+ * A gap is classified once, at load. In the tab that owns the turn `finishTurn`
+ * re-reads on completion, but a second tab has no such signal and would pulse
+ * "Still working on this…" until something else reloaded it. One re-read at the
+ * grace boundary resolves it: past that point the turn has either written its
+ * answer or is genuinely gone, so the next classification is terminal and this
+ * cannot schedule itself again.
+ */
+export function msUntilGapSettles(
+  messages: TranscriptMessage[],
+  now: number = Date.now(),
+): number | null {
+  const last = messages[messages.length - 1];
+  if (last?.gap !== "pending") return null;
+  const question = messages[messages.length - 2];
+  if (!question?.createdAt) return null;
+  const age = now - new Date(question.createdAt).getTime();
+  return Math.max(0, IN_FLIGHT_GRACE_MS - age);
+}
+
 export function withGapMarkers<T extends TranscriptMessage>(
   messages: T[],
   streamingHere: boolean,

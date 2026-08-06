@@ -14,6 +14,7 @@
 import {
   FAILED_TEXT,
   IN_FLIGHT_GRACE_MS,
+  msUntilGapSettles,
   PENDING_TEXT,
   type TranscriptMessage,
   withGapMarkers,
@@ -115,6 +116,33 @@ check("failed marker carries the failed text", marked[1]?.content ?? "", FAILED_
 const pendingMarked = withGapMarkers([user("1", ago(1000))], true, NOW);
 check("pending marker carries the pending text", pendingMarked[1]?.content ?? "", PENDING_TEXT);
 check("marker ids derive from the question", marked[1]?.id ?? "", "1:gap");
+
+console.log("── a pending gap settles itself in a tab that owns no turn");
+const num = (label: string, got: number | null, want: number | null) => {
+  const ok = got === want;
+  console.log(`  ${ok ? "✅" : "❌"} ${label} — ${got}${ok ? "" : ` (expected ${want})`}`);
+  if (!ok) failures++;
+};
+num(
+  "a settled transcript schedules nothing",
+  msUntilGapSettles(withGapMarkers([user("1", ago(0)), bot("2")], false, NOW), NOW),
+  null,
+);
+num(
+  "a failed gap schedules nothing — it is already terminal",
+  msUntilGapSettles(withGapMarkers([user("1", ago(3_600_000))], false, NOW), NOW),
+  null,
+);
+num(
+  "a pending gap schedules the remainder of the grace window",
+  msUntilGapSettles(withGapMarkers([user("1", ago(20_000))], false, NOW), NOW),
+  IN_FLIGHT_GRACE_MS - 20_000,
+);
+// The re-read must not be able to schedule another. Past the boundary the
+// classification is terminal, so this converges after exactly one re-read.
+const settled = withGapMarkers([user("1", ago(20_000))], false, NOW + IN_FLIGHT_GRACE_MS);
+check("re-classifying past the boundary yields a settled gap", shape(settled), "uF");
+num("…and schedules nothing further", msUntilGapSettles(settled, NOW + IN_FLIGHT_GRACE_MS), null);
 
 console.log(failures === 0 ? "\nRESULT: PASS ✅" : `\nRESULT: FAIL ❌ (${failures})`);
 if (failures > 0) process.exit(1);
