@@ -248,6 +248,12 @@ status report rather than a retrospective.
   parser, the failure marker and the length limits. Three fixes have now had to be
   applied twice, and each time the public demo was the one left behind. Consolidating
   them is the real fix; until then, a change to one is a change to both.
+- **No required status checks.** GitHub reports "All checks have passed" over
+  whichever checks reported, so during an Actions outage a pull request can show green
+  on its deploy checks alone while `build` and `Eval` never ran — and `main` can carry
+  commits no workflow ever verified. Same shape as the eval gate's old
+  zero-cases-passes bug, one level up. See
+  [decision 7](docs/decisions.md#7--a-green-pull-request-is-not-a-green-build).
 - **No unit test suite.** Correctness is guarded by the eval harness and by targeted
   scripts. `check:stream` and `check:gaps` need no credentials and run in CI;
   `check:cache`, `eval` and `eval:memory` need real keys and are manual.

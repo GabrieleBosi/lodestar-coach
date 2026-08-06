@@ -254,3 +254,32 @@ demo, which is the only view that shows what a visitor actually gets.
 **What would reverse it.** Consolidating the two into a shared turn component,
 after which this entry describes history rather than a live risk. Until then,
 treat "fixed in the chat client" as unfinished until the demo is checked too.
+
+---
+
+## 7 · A green pull request is not a green build
+
+**Decision.** Record that the repository has **no required status checks**, so
+GitHub's "All checks have passed" reports on whichever checks happened to run,
+not on the checks that are supposed to run. Until branch protection names `build`
+and `Eval` as required, read the check list rather than the badge.
+
+**Evidence.** During a GitHub Actions incident on 2026-08-06, six workflow runs
+failed before executing a single step — `Failed to resolve action download info`
+/ `Service Unavailable`, and `the job was not acquired by Runner of type hosted`
+— and later pushes were not scheduled at all. `main@89472d5` has **zero** runs,
+so the merge commit of #11 is unverified by CI. Meanwhile #12 displayed _All
+checks have passed_ on the strength of three Netlify checks alone, because the
+two workflows that gate correctness never reported.
+
+The failure mode is exactly the one the eval gate was hardened against in #4: an
+absent measurement rendering as a passing one. It was fixed there by failing
+closed when too few cases are judged. At the repository level the equivalent is
+branch protection with required checks — without it, "no result" and "good
+result" are the same colour, and the aggregate badge is the thing doing the
+laundering.
+
+**What would reverse it.** Configuring branch protection on `main` with `build`
+and `Eval` required. That is a repository setting rather than a code change, so
+it cannot be made in a pull request; until it is set, this entry is the record
+that the badge is not load-bearing.
