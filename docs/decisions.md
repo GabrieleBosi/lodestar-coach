@@ -144,3 +144,38 @@ answer text.
 
 **What would reverse it.** A provider whose stream declares tool intent before
 emitting text would make retraction unnecessary, and the `RESET` frame could go.
+
+---
+
+## 5 · A failed turn is a row, not an absence
+
+**Decision.** A turn that fails to produce an answer persists an assistant
+`messages` row marked with `__turn_failed__` in `tool_calls`, and the client
+renders it as an error with a retry. On load, a transcript whose last message is
+the user's is surfaced the same way. Switching conversations mid-stream does
+**not** abort the request.
+
+**Alternatives considered.**
+
+- _Add an `error` column to `messages`._ Rejected for this PR: `role` is
+  CHECK-constrained and there is no error column, so the honest options were a
+  migration or the jsonb column that already records what happened during the
+  turn. A migration would have to be applied before the deploy preview worked,
+  coupling review to a manual step.
+- _Abort the in-flight fetch when the user switches conversation._ Shipped
+  first, then reverted. It disconnects the client mid-turn, and on serverless
+  the function can be killed before it persists the assistant row — which
+  manufactures exactly the orphaned turn this entry exists to prevent. The turn
+  is already paid for, so it is left to finish; a sequence check keeps its
+  output out of the conversation the user moved to.
+
+**Evidence.** The catch path previously wrote only a `traces` row, so a failed
+generation left a user message with no reply. On reload that is
+indistinguishable from an ordinary conversation — a failure that reads as
+success. Separately, `runAgent` degrades rather than throwing, so the catch is
+rare; the common orphan is the killed function, which no server-side write can
+cover. That is why detection is duplicated on load.
+
+**What would reverse it.** Moving the turn to a durable queue with its own
+status column would make the row the source of truth from the start, and the
+client-side trailing-user-message heuristic could go.

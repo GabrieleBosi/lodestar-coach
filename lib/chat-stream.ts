@@ -27,6 +27,23 @@ export interface TurnAction {
   error?: string;
 }
 
+/**
+ * Marker persisted into `messages.tool_calls` when a turn failed to produce an
+ * answer.
+ *
+ * A failed turn used to write no assistant row at all, so on reload it read as
+ * an ordinary conversation whose last message happened to be the user's — a
+ * missing reply indistinguishable from success (issue #2, P0-4). `messages` has
+ * no error column and `role` is CHECK-constrained, so the failure is recorded
+ * in the column that already describes what happened during the turn.
+ */
+export const TURN_FAILED = "__turn_failed__";
+
+/** Did this assistant message record a failed turn rather than an answer? */
+export function isFailedTurn(actions: TurnAction[] | undefined): boolean {
+  return actions?.some((a) => a.name === TURN_FAILED) ?? false;
+}
+
 export interface TurnHandlers {
   onStart: (conversationId: string) => void;
   onText: (chunk: string) => void;
@@ -103,13 +120,17 @@ export async function readTurnStream(body: ReadableStream<Uint8Array>, h: TurnHa
     for (const p of parts) handleSegment(p);
 
     // Flush text eagerly. The only reason to hold is a control frame that hasn't
-    // been terminated yet — the trailer can be split across reads, and emitting
-    // half of it would print `META:{"sourc` into the answer. Text that merely
-    // starts with "M" is not held, because it doesn't follow a control byte.
+    // been terminated yet — a frame can be split across reads, and emitting half
+    // of it would print `META:{"sourc` into the answer.
     //
-    // The trailer is terminated on both sides (see `lib/agent/chat.ts`), so this
-    // hold always resolves mid-stream. It previously did not: an unterminated
-    // trailer stayed a plausible prefix forever and rode out to close (P0-5).
+    // `afterCtrl` stays set while the remainder is empty, which is correct: the
+    // next bytes to arrive really do follow a control byte. The cost is that the
+    // first chunk after any control frame — including a keepalive — is held one
+    // extra read if it happens to look like the start of "META:" or "RESET". At
+    // token cadence that is tens of milliseconds, and it resolves as soon as the
+    // chunk grows past the prefix. What it is NOT is the P0-5 stall: that was an
+    // unterminated trailer, which stayed a plausible prefix forever and rode out
+    // to close no matter how much more arrived.
     if (buffer && !(afterCtrl && couldStartControl(buffer))) {
       h.onText(buffer);
       buffer = "";

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import AnswerBody, { type Citation, citedSources } from "@/components/chat/AnswerBody";
 import SignOutButton from "@/components/SignOutButton";
-import { readTurnStream } from "@/lib/chat-stream";
+import { isFailedTurn, readTurnStream, TURN_FAILED } from "@/lib/chat-stream";
 
 interface AgentAction {
   name: string;
@@ -46,13 +46,16 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
   // Which view the transcript belongs to. Every async write checks it before
   // applying, so a turn or a load that resolves after the user has moved on is
   // dropped instead of landing in someone else's conversation (issue #2, P0-3).
+  //
+  // Deliberately *not* an AbortController. Aborting the fetch disconnects the
+  // client mid-turn, and on serverless the function can be killed before it
+  // persists the assistant row — manufacturing exactly the orphaned turn P0-4
+  // describes. The turn is already paid for, so it is left to finish and write;
+  // the sequence check is what keeps its output out of the wrong conversation.
   const viewSeq = useRef(0);
-  const inFlight = useRef<AbortController | null>(null);
 
   /** Switch what the transcript is showing; invalidates anything in flight. */
   const beginView = useCallback(() => {
-    inFlight.current?.abort();
-    inFlight.current = null;
     setStreaming(false);
     return ++viewSeq.current;
   }, []);
@@ -110,15 +113,30 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
           }[];
         };
         if (seq !== viewSeq.current) return;
-        setMessages(
-          (data.messages ?? []).map((m) => ({
-            id: m.id,
-            role: m.role === "assistant" ? "assistant" : "user",
-            content: m.content ?? "",
-            citations: Array.isArray(m.citations) ? (m.citations as Citation[]) : undefined,
-            actions: Array.isArray(m.tool_calls) ? (m.tool_calls as AgentAction[]) : undefined,
-          })),
-        );
+        const loaded: ChatMessage[] = (data.messages ?? []).map((m) => ({
+          id: m.id,
+          role: m.role === "assistant" ? "assistant" : "user",
+          content: m.content ?? "",
+          citations: Array.isArray(m.citations) ? (m.citations as Citation[]) : undefined,
+          actions: Array.isArray(m.tool_calls) ? (m.tool_calls as AgentAction[]) : undefined,
+        }));
+
+        // The server writes a row for a turn it knows failed, but it cannot
+        // write one for a turn that was never allowed to finish — a killed
+        // function leaves no catch to run. A trailing user message is that
+        // case, and rendering it plainly would let a missing reply read as an
+        // ordinary conversation (P0-4). Surfaced here, not persisted: the turn
+        // may still be streaming in another tab, and retrying is harmless.
+        const last = loaded[loaded.length - 1];
+        if (last && last.role === "user") {
+          loaded.push({
+            id: `${last.id}:incomplete`,
+            role: "assistant",
+            content: "This turn didn't finish, so there's no reply saved for it.",
+            actions: [{ name: TURN_FAILED, ok: false }],
+          });
+        }
+        setMessages(loaded);
       } catch {
         if (seq === viewSeq.current) {
           setLoadError({ id, message: "Couldn't reach the server." });
@@ -138,9 +156,25 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
 
   async function send() {
     const text = input.trim();
+    if (!text) return;
+    setInput("");
+    await sendMessage(text);
+  }
+
+  /** Re-send the user message that preceded a failed assistant reply. */
+  function retryFrom(assistantId: string) {
+    const idx = messages.findIndex((m) => m.id === assistantId);
+    const prior = idx > 0 ? messages[idx - 1] : undefined;
+    if (!prior || prior.role !== "user") return;
+    // Drop the failed reply and the question it answered; `sendMessage` re-adds
+    // the question, so the transcript reads as one attempt rather than two.
+    setMessages((prev) => prev.filter((m) => m.id !== assistantId && m.id !== prior.id));
+    void sendMessage(prior.content);
+  }
+
+  async function sendMessage(text: string) {
     if (!text || streaming) return;
 
-    setInput("");
     setLoadError(null);
     setStreaming(true);
     setMessages((prev) => [...prev, { id: newId(), role: "user", content: text }]);
@@ -150,8 +184,6 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
     // dropped rather than appended to whatever is on screen now (P0-3).
     const seq = viewSeq.current;
     const current = () => seq === viewSeq.current;
-    const controller = new AbortController();
-    inFlight.current = controller;
 
     const assistantId = newId();
     let assistantAdded = false;
@@ -159,7 +191,6 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
     const finishTurn = () => {
       if (finished) return;
       finished = true;
-      if (inFlight.current === controller) inFlight.current = null;
       if (!current()) return;
       setStreaming(false);
       void refreshConversations();
@@ -170,7 +201,6 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ message: text, conversationId }),
-        signal: controller.signal,
       });
 
       if (!res.ok || !res.body) {
@@ -312,48 +342,66 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
                 base and cited.
               </div>
             )}
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                className={m.role === "user" ? "flex justify-end" : "flex flex-col items-start"}
-              >
-                {m.role === "assistant" && m.actions && m.actions.length > 0 && (
-                  <div className="mb-1 flex flex-wrap gap-1">
-                    {m.actions.map((a, i) => (
-                      <span
-                        key={i}
-                        title={a.error ?? a.summary ?? a.name}
-                        className={`rounded-full border px-2 py-0.5 text-[11px] ${
-                          a.ok === false
-                            ? "border-red-300 text-red-600 dark:border-red-900 dark:text-red-400"
-                            : "border-stone-300 text-stone-500 dark:border-stone-700 dark:text-stone-400"
-                        }`}
-                      >
-                        {a.ok === false ? "⚠ " : "⚙ "}
-                        {a.summary ?? a.name}
-                      </span>
-                    ))}
-                  </div>
-                )}
+            {messages.map((m) => {
+              // A turn that failed is persisted as an assistant row so it can't
+              // read as a missing reply on reload (P0-4). It renders as an error
+              // with a retry, never as an answer.
+              const failed = m.role === "assistant" && isFailedTurn(m.actions);
+              return (
                 <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
-                    m.role === "user"
-                      ? "self-end whitespace-pre-wrap bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
-                      : "bg-stone-100 text-stone-900 dark:bg-stone-800 dark:text-stone-100"
-                  }`}
+                  key={m.id}
+                  className={m.role === "user" ? "flex justify-end" : "flex flex-col items-start"}
                 >
-                  {m.role === "assistant" ? (
-                    m.content ? (
+                  {m.role === "assistant" && !failed && m.actions && m.actions.length > 0 && (
+                    <div className="mb-1 flex flex-wrap gap-1">
+                      {m.actions.map((a, i) => (
+                        <span
+                          key={i}
+                          title={a.error ?? a.summary ?? a.name}
+                          className={`rounded-full border px-2 py-0.5 text-[11px] ${
+                            a.ok === false
+                              ? "border-red-300 text-red-600 dark:border-red-900 dark:text-red-400"
+                              : "border-stone-300 text-stone-500 dark:border-stone-700 dark:text-stone-400"
+                          }`}
+                        >
+                          {a.ok === false ? "⚠ " : "⚙ "}
+                          {a.summary ?? a.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
+                      m.role === "user"
+                        ? "self-end whitespace-pre-wrap bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
+                        : failed
+                          ? "border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+                          : "bg-stone-100 text-stone-900 dark:bg-stone-800 dark:text-stone-100"
+                    }`}
+                  >
+                    {m.role !== "assistant" ? (
+                      m.content
+                    ) : failed ? (
+                      <>
+                        <p>{m.content || "This turn didn't produce an answer."}</p>
+                        <button
+                          type="button"
+                          onClick={() => retryFrom(m.id)}
+                          disabled={streaming}
+                          className="mt-2 rounded-md border border-amber-400 px-2 py-1 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:hover:bg-amber-900/40"
+                        >
+                          Retry
+                        </button>
+                      </>
+                    ) : m.content ? (
                       <AnswerBody content={m.content} citations={m.citations} />
                     ) : (
                       (streaming && "…") || ""
-                    )
-                  ) : (
-                    m.content
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <form
