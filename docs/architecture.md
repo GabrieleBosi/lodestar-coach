@@ -124,11 +124,7 @@ context — so a preference stated in one session is recalled in the next.
   usually misses, because the agent rephrases its own search ("…growth hormone protein
   synthesis" vs "…hypertrophy protein synthesis"). That missing half is structural and can't
   improve without stabilising query generation.
-- **Why generation isn't cached** — it was, and it was mis-keyed with the _embedding_ model,
-  so changing the chat model invalidated nothing (issue #2, P0-8). Caching user-facing
-  coaching answers is a product decision rather than an optimisation, and the key here can't
-  see the user's logged data. If it's wanted later it belongs in the agent loop, keyed over
-  `(model, system, history, message)` with invalidation on user-data writes.
+- **Why generation isn't cached** — see [decision 1](decisions.md#1--generation-is-not-cached-embeddings-are).
 - **Rate limiting & degradation** — model calls are wrapped with a timeout + one retry and
   degrade to a friendly message if Gemini stays unavailable. The limiter
   (`lib/agent/ratelimit.ts`) is a **byproduct of tracing**: it counts `traces` rows for a

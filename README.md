@@ -164,6 +164,40 @@ All environment variables are documented in [`.env.example`](.env.example).
 - **RLS everywhere.** Users can only read/write their own rows; the service-role key is
   `import "server-only"` so it can never reach the client bundle.
 
+Longer-form reasoning for individual calls — including why generation isn't cached — lives in
+[`docs/decisions.md`](docs/decisions.md).
+
+## Known limitations
+
+Current as of the open work in [#2](https://github.com/GabrieleBosi/lodestar-coach/issues/2).
+Lines come off this list as they're fixed, so its length is a status report rather than a
+retrospective.
+
+- **Streaming is cosmetic.** The agent completes its whole turn, then the finished string is
+  sliced and emitted — `chunkText(agent.finalText)`. Nothing renders until the answer is
+  fully generated, so time-to-first-token is the full turn (~9s measured).
+- **The turn holds the connection open after the answer.** Memory extraction is a further
+  model call that runs before the stream closes, measured at **11.7s** after the answer is
+  already on screen; the composer stays disabled for that window.
+- **Answers render as raw markdown.** `**bold**` and `###` appear literally.
+- **The embedding cache has no TTL and no eviction.** Rows live forever. Fine at this size,
+  not a managed cache.
+- **The demo rate limit is global.** 40 requests per 10 minutes across _all_ visitors — a
+  cost ceiling, not per-visitor fairness. One visitor can exhaust it for everyone. The
+  limiter also counts `traces` rows, so it **fails open** if a trace insert fails, and it is
+  check-then-act with no lock.
+- **Citations are prompt-enforced, not validated.** Nothing checks that a `[n]` marker in an
+  answer corresponds to a retrieved chunk; the eval measures it after the fact rather than
+  the code preventing it.
+- **The agent loop is Gemini-specific.** Retrieval and embeddings go through the
+  `LLMProvider` interface; `lib/agent/loop.ts` depends on Gemini function-calling types.
+  Tracked in [#6](https://github.com/GabrieleBosi/lodestar-coach/issues/6).
+- **No unit test suite.** Correctness is guarded by the eval harness and by targeted scripts
+  (`npm run eval`, `npm run eval:memory`, `npm run check:cache`). `check:cache` needs
+  service-role credentials, so it is a **manual** guard and does not run in CI.
+- **The eval baseline is stale.** `evals/baseline.json` predates the P0-1 fix and was judged
+  by a different model, so PR deltas are suppressed until it is re-judged.
+
 ## What I'd build next
 
 - **Ingestion at scale** — chunk-level re-embedding queue, more sources, and a citation
