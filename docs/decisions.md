@@ -288,3 +288,45 @@ laundering.
 and `eval` required. That is a repository setting rather than a code change, so
 it cannot be made in a pull request; until it is set, this entry is the record
 that the badge is not load-bearing.
+
+---
+
+## 8 · A cancelled job with no steps is not a result
+
+**Decision.** Treat "the job never ran" as a third outcome, distinct from pass
+and fail. A gate may not read it as either. Where a workflow can be re-run
+without pushing, it should be — `ci.yml` now carries `workflow_dispatch:`
+alongside `eval.yml`.
+
+**Evidence.** During the Actions incident of 2026-08-06, three Eval runs on
+consecutive commits:
+
+| commit    | run conclusion | job conclusion | steps executed |
+| --------- | -------------- | -------------- | -------------- |
+| `0d30b69` | `failure`      | `cancelled`    | **0**          |
+| `9b43b10` | `failure`      | `cancelled`    | **0**          |
+| `9139a19` | `success`      | `success`      | 11             |
+
+The first two never acquired a runner — `the job was not acquired by Runner of
+type hosted`, and a sibling CI run died at _Set up job_ with `Failed to resolve
+action download info` / `Service Unavailable`. No step executed, so no case was
+judged, no threshold was compared and no model call was made. Reading `failure`
+there and concluding "the eval regressed" is as wrong as reading it and
+concluding "the eval passed": the run measured nothing.
+
+The reverse error is the more dangerous one, and it happened at the same time.
+`main@ec0ed06` and `main@c271ecb` received **zero** check runs, leaving main's
+combined status `pending` indefinitely — while pull requests displayed _All
+checks have passed_ on their Netlify checks alone (see
+[decision 7](#7--a-green-pull-request-is-not-a-green-build)).
+
+**Why this keeps recurring.** It is the same shape as the eval gate's original
+defect, which passed a run that judged zero cases, and as P0-4, where a missing
+assistant row rendered as an ordinary conversation. Each time, an _absent_
+measurement was displayed as a _good_ one. The rule that follows from all three:
+a system reporting on itself must be able to say "I don't know", and every layer
+that consumes that report must handle the answer.
+
+**What would reverse it.** Nothing about the principle. The operational half —
+required status checks, so a missing report blocks rather than passes — is a
+repository setting, tracked in decision 7.
