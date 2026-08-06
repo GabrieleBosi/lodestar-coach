@@ -72,9 +72,14 @@ loop, eval methodology, safety model, and cost design.
 ## Evaluation results
 
 `npm run eval` scores the RAG pipeline against a golden set and blocks regressions in CI.
-Latest run (commit `332b926`, judge `gemini-2.5-flash`, 7 cases judged across all four
-categories — in-scope, out-of-scope, unsafe, insufficient-context; see
-[`evals/report.md`](evals/report.md)):
+
+The scores below are the **last run that reached quorum** — commit `332b926`, judge
+`gemini-2.5-flash`, 7 cases judged across all four categories (in-scope, out-of-scope,
+unsafe, insufficient-context; see [`evals/report.md`](evals/report.md)). That run
+**predates the tool-routing fix** in [#2](https://github.com/GabrieleBosi/lodestar-coach/issues/2)
+and used a fallback judge, so it is the current published baseline rather than a
+measurement of `main` as it stands today; PR deltas are suppressed until it is re-judged.
+Treating it as current would be the same mistake the harness is built to prevent.
 
 | Metric               | Score    | Threshold |
 | -------------------- | -------- | --------- |
@@ -177,9 +182,11 @@ retrospective.
   sliced and emitted — `chunkText(agent.finalText)`. Nothing renders until the answer is
   fully generated, so time-to-first-token is the full turn (~9s measured).
 - **The turn holds the connection open after the answer.** Memory extraction is a further
-  model call that runs before the stream closes, measured at **11.7s** after the answer is
-  already on screen; the composer stays disabled for that window.
-- **Answers render as raw markdown.** `**bold**` and `###` appear literally.
+  model call — measured at **11.7s** after the answer is already on screen — and it runs
+  before the stream closes, because work scheduled after `controller.close()` can be frozen
+  or killed on serverless and would drop memories silently. The UI no longer waits on it
+  (the metadata trailer completes the turn), but the request does. Moving it to a durable
+  queue is tracked separately.
 - **The embedding cache has no TTL and no eviction.** Rows live forever. Fine at this size,
   not a managed cache.
 - **The demo rate limit is global.** 40 requests per 10 minutes across _all_ visitors — a
@@ -188,7 +195,10 @@ retrospective.
   check-then-act with no lock.
 - **Citations are prompt-enforced, not validated.** Nothing checks that a `[n]` marker in an
   answer corresponds to a retrieved chunk; the eval measures it after the fact rather than
-  the code preventing it.
+  the code preventing it. The UI now marks an unmatched `[n]` as unresolved instead of
+  rendering it as a working reference, which surfaces the gap without closing it.
+- **The sources list can repeat a document.** Two chunks from the same file appear as two
+  entries with the same title, distinguished only by heading.
 - **The agent loop is Gemini-specific.** Retrieval and embeddings go through the
   `LLMProvider` interface; `lib/agent/loop.ts` depends on Gemini function-calling types.
   Tracked in [#6](https://github.com/GabrieleBosi/lodestar-coach/issues/6).
@@ -196,7 +206,9 @@ retrospective.
   (`npm run eval`, `npm run eval:memory`, `npm run check:cache`). `check:cache` needs
   service-role credentials, so it is a **manual** guard and does not run in CI.
 - **The eval baseline is stale.** `evals/baseline.json` predates the P0-1 fix and was judged
-  by a different model, so PR deltas are suppressed until it is re-judged.
+  by a fallback model, so PR deltas are suppressed until it is re-judged. This is the same
+  run quoted under [Evaluation results](#evaluation-results) — the scores there are the last
+  ones that reached quorum, not a measurement of `main` today.
 
 ## What I'd build next
 

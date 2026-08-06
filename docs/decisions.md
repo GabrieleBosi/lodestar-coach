@@ -43,3 +43,70 @@ keyed over `(model, system, history, message)` with explicit invalidation when
 the user's logged data changes, not in a provider wrapper whose key cannot see
 any of that. Reversing it also requires deciding, out loud, that a cached
 coaching answer is acceptable.
+
+---
+
+## 2 · The metadata trailer is the turn-complete signal, not the stream close
+
+**Decision.** `lib/agent/chat.ts` terminates the trailer on both sides —
+`CTRL + "META:" + json + CTRL` — and the client treats its arrival as the end of
+the turn: the composer unlocks, the sidebar refetches, citations resolve. The
+stream's `close` remains only as an idempotent backstop. Server order is
+**persist → META → extract → close**.
+
+**Alternatives considered.**
+
+- _Reorder the server so the slow tail runs after the trailer, and leave the
+  wire format alone._ Rejected: it fixes nothing. The trailer was unterminated,
+  so `buffer.split(CTRL)` left it as the trailing fragment and the client's
+  prefix-hold heuristic — `!META.startsWith(buffer.slice(0, 5))`, which is false
+  for exactly a buffer beginning `META:` — held it until the post-loop flush
+  after `done`. Metadata arrived at close no matter what preceded it.
+- _Drop the prefix-hold heuristic entirely once the trailer is terminated._
+  Rejected: the trailer is one `send()` but HTTP chunking can still split it,
+  and an unguarded flush would print `META:{"sourc` into the answer. The hold
+  now applies only to a partial that actually follows a control byte, so
+  ordinary text — including text starting with "M" — is never stalled.
+- _Move memory extraction after `controller.close()`._ Rejected: the browser
+  stops waiting, but the platform doesn't guarantee the work runs. Post-close
+  work can be frozen or killed on serverless, which would drop memories with no
+  error anywhere. It stays inside the stream, after the trailer.
+
+**Evidence.** A browser replay of the real parser timed `onText` at +1ms and
+`onMeta` at +5202ms, with the trailer enqueued server-side at +200ms — a 5s gap
+that server-side `send()` timestamps could not see, because they never exercised
+the parser. `npm run check:stream` reproduces it deterministically: with a 400ms
+gap between trailer and close, the unterminated form delivers META at 529ms
+(= close) and the terminated form at 55ms.
+
+**What would reverse it.** A wire format with explicit framing (length prefixes
+or newline-delimited JSON) would make both the terminator and the hold
+unnecessary, and would be worth adopting if the stream ever carries more than
+two frame types.
+
+---
+
+## 3 · The sources panel lists what the answer cites, not what retrieval returned
+
+**Decision.** `citedSources()` filters the trailer's citations to the `[n]`
+markers present in the answer text. A grouped marker (`[1, 3]`) counts as both.
+
+**Alternatives considered.**
+
+- _List everything retrieved._ Rejected: retrieval runs on every turn, so a
+  refusal ("I don't have enough grounded information on that yet") carries six
+  chunks that failed to ground it. Displaying them under "Sources" claims the
+  refusal was sourced — the opposite of what it says.
+- _Suppress the panel only when the answer matches the refusal string._
+  Rejected: it makes the UI depend on prompt wording, and does nothing for a
+  grounded answer that cites two of six retrieved chunks.
+
+**Evidence.** A live demo turn retrieved 6 chunks and cited 2; the panel now
+shows 2. The first draft of the filter matched only `\[(\d+)\]` and silently
+dropped the `[1, 3]` group in the answer's opening sentence — grouped markers
+are as common as separate ones, so the regex captures the whole group.
+
+**What would reverse it.** Validating citations at generation time (rejecting or
+repairing an answer whose markers don't match retrieved chunks) would make the
+displayed set equal to the retrieved set by construction, and this filter would
+become dead code rather than a correction.
