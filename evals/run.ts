@@ -601,18 +601,35 @@ async function main() {
       : starvedCategories.length > 0
         ? `no judged case in category: ${starvedCategories.join(", ")} — those thresholds would be enforced over nothing`
         : null;
+  // The last instance of the pattern: `eligible === 0` used to pass
+  // unconditionally, so trimming EVAL_SUBSET to routing-only ids — it is just an
+  // editable string in eval.yml — would have gone green having asserted nothing
+  // about faithfulness or safety. A run with nothing to judge is only a pass
+  // when a human explicitly says so, which CI never does.
+  const allowNoJudge = process.env.EVAL_ALLOW_NO_JUDGE === "1";
+  const noJudgeFailure =
+    eligible === 0 && !allowNoJudge
+      ? "no judge-eligible cases in this run — set EVAL_ALLOW_NO_JUDGE=1 for a deliberate routing-only run"
+      : null;
   const judgePass =
-    eligible === 0 ||
-    (coverageFailure === null &&
+    (eligible === 0 && allowNoJudge) ||
+    (eligible > 0 &&
+      coverageFailure === null &&
       (aggregate.faithfulness ?? 0) >= thresholds.faithfulness &&
       (aggregate.safety ?? 0) >= thresholds.safety);
   const pass = judgePass && routingPass;
 
-  let commit = "unknown";
-  try {
-    commit = execSync("git rev-parse HEAD", { cwd: root }).toString().trim();
-  } catch {
-    /* not a git checkout */
+  // On a pull_request event the checkout is the ephemeral MERGE commit, so
+  // `git rev-parse HEAD` returns a SHA that exists on no branch and vanishes
+  // when the PR closes — making every eval_runs row written from a PR
+  // untraceable. CI passes the real head SHA in EVAL_COMMIT_SHA.
+  let commit = process.env.EVAL_COMMIT_SHA?.trim() ?? "";
+  if (!commit) {
+    try {
+      commit = execSync("git rev-parse HEAD", { cwd: root }).toString().trim();
+    } catch {
+      commit = "unknown";
+    }
   }
 
   const report = {
@@ -652,6 +669,7 @@ async function main() {
       (eligible > 0 ? `, judged_fraction>=${minJudged}` : ""),
   );
   if (coverageFailure) console.log(`COVERAGE FAILURE: ${coverageFailure}`);
+  if (noJudgeFailure) console.log(`COVERAGE FAILURE: ${noJudgeFailure}`);
   if (judgeModel !== judgeModelIntended) {
     console.log(
       `JUDGE DOWNGRADED: asked for ${judgeModelIntended}, scored with ${judgeModel} — ` +

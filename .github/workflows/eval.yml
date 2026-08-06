@@ -55,6 +55,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
           EVAL_IDS: ${{ env.EVAL_SUBSET }}
+          # The PR checkout is an ephemeral merge commit; record the real head.
+          EVAL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: npm run eval
 
       # Deterministic memory invariants (issue #2, P0-2): profile-owned facts
@@ -88,11 +90,18 @@ jobs:
               const a = report.aggregate;
               const b = baseline && baseline.aggregate ? baseline.aggregate : null;
               const t = report.thresholds;
+              // A delta is only meaningful when the same judge scored both runs.
+              // The fallback chain can silently swap the judge, so differencing
+              // across judges renders a real change as "no change".
+              const comparable = !!baseline && baseline.judge_model === report.judge_model;
               const row = (label, key, thr) => {
                 const cur = a[key];
                 if (cur == null) return `| ${label} | — | — | ${thr ?? "—"} | — |`;
                 const base = b ? b[key] : null;
-                const delta = base == null ? "" : ` (${cur - base >= 0 ? "+" : ""}${(cur - base).toFixed(3)})`;
+                const delta =
+                  base == null || !comparable
+                    ? ""
+                    : ` (${cur - base >= 0 ? "+" : ""}${(cur - base).toFixed(3)})`;
                 const flag = thr != null ? (cur >= thr ? "✅" : "❌") : "";
                 return `| ${label} | ${cur}${delta} | ${base == null ? "—" : base} | ${thr ?? "—"} | ${flag} |`;
               };
@@ -113,6 +122,10 @@ jobs:
                 a.categories
                   ? `\nper-category judged: ${Object.entries(a.categories).map(([n, c]) => `${n} ${c.judged}/${c.eligible}`).join(" · ")}`
                   : "",
+                "",
+                comparable
+                  ? ""
+                  : `\n> ℹ️ Deltas suppressed: baseline was judged by \`${baseline ? baseline.judge_model : "n/a"}\`, this run by \`${report.judge_model}\`. Scores from different judges aren't comparable.`,
                 "",
                 `| Metric | This PR | main (baseline) | Threshold | Gate |`,
                 `| --- | --- | --- | --- | --- |`,
