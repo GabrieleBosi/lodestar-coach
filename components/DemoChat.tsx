@@ -82,6 +82,9 @@ export default function DemoChat() {
           setMessages((m) =>
             m.map((x) => (x.id === assistantId ? { ...x, content: x.content + t } : x)),
           ),
+        // The step that produced this text turned out to call a tool.
+        onReset: () =>
+          setMessages((m) => m.map((x) => (x.id === assistantId ? { ...x, content: "" } : x))),
         onMeta: (meta) => {
           setMessages((m) =>
             m.map((x) =>

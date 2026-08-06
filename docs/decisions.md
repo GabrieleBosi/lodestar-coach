@@ -110,3 +110,37 @@ are as common as separate ones, so the regex captures the whole group.
 repairing an answer whose markers don't match retrieved chunks) would make the
 displayed set equal to the retrieved set by construction, and this filter would
 become dead code rather than a correction.
+
+---
+
+## 4 · Answer tokens are forwarded before the step that produced them is classified
+
+**Decision.** `runAgent` takes a `StreamSink`. Tokens are forwarded as the model
+generates them; if that step turns out to call a tool, the server emits a
+`RESET` control frame and the client discards the text. `AgentResult.alreadyStreamed`
+tells the caller whether the answer still needs sending.
+
+**Alternatives considered.**
+
+- _Buffer each step and forward only once it is known to have made no function
+  calls._ Rejected after measuring what it would buy: `finalText` is assigned
+  only on the step with zero function calls, and the loop breaks there
+  (`lib/agent/loop.ts`). "The step is known clean" is the same instant `runAgent`
+  already returns — so this is a no-op, not a conservative version.
+- _Keep the unary call and chunk the finished string._ That is the behaviour
+  being replaced: time-to-first-token equals the whole turn by construction.
+
+**Evidence.** A local tool-using turn went from 3 frames delivered at 13.2s to
+29 frames spanning 9.9-13.2s. Retractions are rare in practice — the tool step
+emitted no text at all in the measured runs — which is why forwarding
+optimistically and retracting is cheaper than waiting.
+
+The first implementation rebuilt the model `Content` from accumulated text plus
+function calls. That dropped `thoughtSignature` from functionCall parts, and
+Gemini 3.x rejected the follow-up turn with `400 Function call is missing a
+thought_signature in functionCall parts` — every tool-using turn degraded. Parts
+are now kept exactly as received, and `thought` parts are never forwarded as
+answer text.
+
+**What would reverse it.** A provider whose stream declares tool intent before
+emitting text would make retraction unnecessary, and the `RESET` frame could go.

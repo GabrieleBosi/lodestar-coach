@@ -9,8 +9,10 @@
  * flush, which runs after `done`. Chips and Sources therefore waited out the
  * whole memory-extraction tail (~11.7s) no matter what order the server wrote.
  *
- * Replays a synthetic stream with a deliberate gap between the META frame and
- * close, and asserts META lands in the gap. No network, no model quota.
+ * Replays synthetic streams with a deliberate gap between the last frame and
+ * close, and asserts each control frame is handled where it lands. Also covers
+ * the split trailer, the RESET retraction, and text that merely looks like a
+ * control frame. No network, no model quota.
  */
 import { readTurnStream } from "../lib/chat-stream";
 
@@ -46,6 +48,9 @@ async function run(frames: string[]) {
       textAt ??= Date.now() - t0;
       text += t;
     },
+    onReset: () => {
+      text = "";
+    },
     onMeta: (m) => {
       metaAt ??= Date.now() - t0;
       meta = m as unknown as { sources?: unknown[] };
@@ -65,7 +70,9 @@ async function main() {
   const trailer = CTRL + "META:" + payload + CTRL;
   const answer = "A deload week reduces training stress [1].";
   const report = (label: string, r: Awaited<ReturnType<typeof run>>) =>
-    console.log(`     ${label}: text @${r.textAt}ms · meta @${r.metaAt}ms · close @${r.closedAt}ms`);
+    console.log(
+      `     ${label}: text @${r.textAt}ms · meta @${r.metaAt}ms · close @${r.closedAt}ms`,
+    );
 
   console.log("── terminated trailer (current wire format)");
   const good = await run([answer, trailer]);
@@ -110,6 +117,34 @@ async function main() {
   check(
     mLike.textAt !== null && mLike.textAt < 40,
     `text was NOT stalled waiting to see if it was a trailer (@${mLike.textAt}ms)`,
+  );
+
+  // A step's tokens are forwarded before the agent knows whether that step will
+  // end in a tool call. When it does, the server retracts them.
+  console.log("── retracted step (RESET)");
+  const retracted = await run([
+    "Let me check your logs.",
+    CTRL + "RESET" + CTRL,
+    "Your squat is trending up [1].",
+    trailer,
+  ]);
+  report("reset mid-turn", retracted);
+  check(
+    retracted.text === "Your squat is trending up [1].",
+    `only post-reset text survived ("${retracted.text}")`,
+  );
+  check(retracted.metaAt !== null, "the turn still completed normally after a reset");
+
+  // RESET and META share a prefix-free namespace, but "R"/"RE"/… must not stall
+  // ordinary text any more than "M" does.
+  console.log("── text that merely looks like RESET");
+  const rText = "Recovery takes time.";
+  const rLike = await run([rText, trailer]);
+  report("text starts with R", rLike);
+  check(rLike.text === rText, `answer text intact ("${rLike.text}")`);
+  check(
+    rLike.textAt !== null && rLike.textAt < 40,
+    `text was NOT stalled by the RESET prefix check (@${rLike.textAt}ms)`,
   );
 
   console.log(failures === 0 ? "\nRESULT: PASS ✅" : `\nRESULT: FAIL ❌ (${failures})`);

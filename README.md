@@ -147,7 +147,7 @@ All environment variables are documented in [`.env.example`](.env.example).
 
 - **Partly provider-agnostic LLM interface.** The RAG and embedding layer depends on an
   `LLMProvider` interface rather than the vendor SDK, so that half is swappable. The **agent
-  loop is not**: `lib/agent/loop.ts` calls `ai.models.generateContent` directly, because it
+  loop is not**: `lib/agent/loop.ts` calls `ai.models.generateContentStream` directly, because it
   depends on Gemini's function-calling types. Routing it through the interface would mean
   generalising those types, so the honest description today is "provider-agnostic retrieval,
   Gemini-specific agent" rather than a clean abstraction throughout.
@@ -178,9 +178,12 @@ Current as of the open work in [#2](https://github.com/GabrieleBosi/lodestar-coa
 Lines come off this list as they're fixed, so its length is a status report rather than a
 retrospective.
 
-- **Streaming is cosmetic.** The agent completes its whole turn, then the finished string is
-  sliced and emitted — `chunkText(agent.finalText)`. Nothing renders until the answer is
-  fully generated, so time-to-first-token is the full turn (~9s measured).
+- **Time-to-first-token is dominated by everything before the answer.** Answer tokens now
+  stream as they are generated, but the work ahead of them — route prelude, personalization
+  recall, and the retrieval tool step — still runs first. Measured on a local tool-using
+  turn: first token at **9.9s**, last at 13.2s, where the whole answer previously landed at
+  once at 13.2s. The route prelude alone (rate limit, conversation upsert, history fetch,
+  cold start) was **3.9s** of that, and is now recorded as `prelude_ms` on the request trace.
 - **The turn holds the connection open after the answer.** Memory extraction is a further
   model call — measured at **11.7s** after the answer is already on screen — and it runs
   before the stream closes, because work scheduled after `controller.close()` can be frozen

@@ -33,10 +33,19 @@ export interface TurnParams {
   profileReadOnly?: boolean;
   /** trace stage for the request-level row (e.g. "chat.request" | "demo.request"). */
   stage?: string;
+  /**
+   * Milliseconds the route spent before handing off — rate limit, body parse,
+   * conversation upsert, history fetch, plus any cold start. Invisible in the
+   * per-stage traces, but measured at 3.9-10.9s to first byte, so it is
+   * recorded rather than inferred.
+   */
+  preludeMs?: number;
 }
 
 /** Control byte separating keepalives and the trailing metadata from answer text. */
 const CTRL = "\u0000";
+/** Control frame: discard the answer text forwarded so far this turn. */
+const RESET = "RESET";
 const KEEPALIVE_MS = 5_000;
 
 export function streamTurn(params: TurnParams): Response {
@@ -66,6 +75,7 @@ export function streamTurn(params: TurnParams): Response {
 
       const started = Date.now();
       let metaSent = false;
+      let firstToken = false;
       /**
        * The trailer is the turn-complete signal, so it must be *terminated*.
        * Without the closing CTRL the client's `buffer.split(CTRL)` leaves it as
@@ -109,11 +119,27 @@ export function streamTurn(params: TurnParams): Response {
           system,
           history,
           userMessage: message,
+          // Tokens go out as they are generated. A step that turns out to call a
+          // tool retracts what it forwarded — the loop discards that text anyway.
+          sink: {
+            onToken: (t) => {
+              if (!firstToken) {
+                firstToken = true;
+                clearInterval(keepalive);
+              }
+              send(t);
+            },
+            onReset: () => send(CTRL + RESET + CTRL),
+          },
         });
         const latencyMs = Date.now() - started;
         clearInterval(keepalive);
 
-        for (const piece of chunkText(agent.finalText)) send(piece);
+        // Nothing to send when the client already holds exactly this answer;
+        // the degraded and empty-generation paths still need it.
+        if (!agent.alreadyStreamed) {
+          for (const piece of chunkText(agent.finalText)) send(piece);
+        }
 
         // Order matters: persist -> META -> extract -> close.
         //
@@ -135,6 +161,8 @@ export function streamTurn(params: TurnParams): Response {
             actions: agent.actions.length,
             degraded: agent.degraded,
             degradedError: agent.degradedError ?? null,
+            prelude_ms: params.preludeMs ?? null,
+            streamed: agent.alreadyStreamed,
           } as unknown as Json,
         });
 
@@ -174,8 +202,10 @@ export function streamTurn(params: TurnParams): Response {
           }
         }
       } catch (err) {
+        // Whatever was forwarded before the failure is not an answer.
+        if (firstToken) send(CTRL + RESET + CTRL);
         send(
-          "\n\nSomething went wrong while answering. Please try again. " +
+          "Something went wrong while answering. Please try again. " +
             "(This is general information, not medical advice.)",
         );
         // Complete the turn even on the error path, so the composer unlocks on

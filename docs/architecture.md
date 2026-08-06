@@ -53,8 +53,9 @@ agent variant (`AGENT_SYSTEM_PROMPT`) adds tool-use and safety guidance.
 
 `lib/agent/loop.ts` runs a manual multi-step loop:
 
-1. `generateContent` with `tools` (function declarations built from each tool's JSON schema)
-   and the system instruction.
+1. `generateContentStream` with `tools` (function declarations built from each tool's JSON
+   schema) and the system instruction. Response parts are kept exactly as received — they
+   carry `thoughtSignature`, which Gemini 3.x requires back on the follow-up turn.
 2. If the response has `functionCalls`, each is **zod-validated**, executed against the
    user's RLS-scoped Supabase client, and its result fed back as a `functionResponse` turn.
    Tool errors are returned to the model (not thrown) so it can recover or explain.
@@ -64,9 +65,14 @@ agent variant (`AGENT_SYSTEM_PROMPT`) adds tool-use and safety guidance.
 accumulation), `log_workout`, `log_nutrition`, `get_history` (time-series over the user's
 own logs), `compute_energy_targets`.
 
-**Streaming**: the request pipeline (`lib/agent/chat.ts`) sends a first JSON meta line
-(`conversationId`, `sources`, `actions`) then streams the answer; the UI renders the
-"actions taken" trace and a sources panel.
+**Streaming** (`lib/agent/chat.ts`): an opening JSON line (`conversationId`) goes out
+immediately, then answer tokens as they are generated, then a `�META:{…}�` trailer with
+sources and actions. The trailer is terminated on both sides and is the **turn-complete**
+signal — the composer unlocks and the sidebar refetches on it, not on the stream close,
+which still has the post-answer memory-extraction tail behind it. A step that emits text
+and then calls a tool is retracted with a `�RESET�` frame, since the loop only keeps the
+text of the step that stops calling tools. Server order is persist → META → extract →
+close; `npm run check:stream` guards the format.
 
 ## Long-term memory
 

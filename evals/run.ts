@@ -17,6 +17,7 @@ import { type Content, GoogleGenAI } from "@google/genai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { streamTurn } from "../lib/agent/chat";
+import { readTurnStream as readTurn } from "../lib/chat-stream";
 import type { Database } from "../lib/db/types";
 import { readGeminiConfig } from "../lib/llm/gemini";
 import { buildGroundedPrompt } from "../lib/rag/prompt";
@@ -221,8 +222,6 @@ function clamp01(n: unknown): number {
 // authed client, exactly like production. Testing runAgent directly would have
 // stayed green while prod was broken.
 
-const CTRL = "\u0000";
-
 interface RoutingHarness {
   authed: SupabaseClient<Database>;
   userId: string;
@@ -267,33 +266,31 @@ async function setupRoutingHarness(): Promise<RoutingHarness> {
   };
 }
 
-/** Read a streamTurn Response: returns the answer text and the META actions. */
+/**
+ * Read a streamTurn Response: returns the answer text and the META actions.
+ *
+ * Delegates to the production parser rather than re-implementing the wire
+ * format. A private copy here drifts silently: it would have concatenated the
+ * trailer's terminator into the metadata (breaking every `expected_tools`
+ * assertion) and folded retracted text back into the answer.
+ */
 async function readTurnStream(
   res: Response,
 ): Promise<{ answer: string; actions: { name: string; ok?: boolean }[] }> {
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let full = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (value) full += decoder.decode(value, { stream: true });
-    if (done) break;
-  }
-  const firstNl = full.indexOf("\n");
-  const metaIdx = full.lastIndexOf(CTRL + "META:");
-  const rawBody = metaIdx >= 0 ? full.slice(firstNl + 1, metaIdx) : full.slice(firstNl + 1);
-  const answer = rawBody.split(CTRL).join("");
+  let answer = "";
   let actions: { name: string; ok?: boolean }[] = [];
-  if (metaIdx >= 0) {
-    try {
-      const meta = JSON.parse(full.slice(metaIdx + CTRL.length + "META:".length)) as {
-        actions?: { name: string; ok?: boolean }[];
-      };
+  await readTurn(res.body!, {
+    onStart: () => {},
+    onText: (t) => {
+      answer += t;
+    },
+    onReset: () => {
+      answer = "";
+    },
+    onMeta: (meta) => {
       actions = meta.actions ?? [];
-    } catch {
-      actions = [];
-    }
-  }
+    },
+  });
   return { answer, actions };
 }
 

@@ -4,11 +4,13 @@
  * Wire format (see `lib/agent/chat.ts`):
  *   line 1            JSON `{ conversationId }`, sent immediately
  *               keepalive, emitted while the agent works (ignored)
- *   …text…            the answer, streamed in chunks
+ *   …text…            answer tokens, forwarded as they are generated
+ *   RESET       discard the answer text forwarded so far
  *   META:{...}  trailing metadata (sources + actions), known only at the end
  */
 const CTRL = "\u0000";
 const META = "META:";
+const RESET = "RESET";
 
 export interface TurnSource {
   n: number;
@@ -29,11 +31,24 @@ export interface TurnHandlers {
   onStart: (conversationId: string) => void;
   onText: (chunk: string) => void;
   onMeta: (meta: { sources: TurnSource[]; actions: TurnAction[] }) => void;
+  /**
+   * Discard every `onText` chunk delivered so far this turn.
+   *
+   * Answer tokens are forwarded before the agent knows whether the step that
+   * produced them will end in a tool call. When it does, that text is not part
+   * of the answer and the server retracts it.
+   */
+  onReset?: () => void;
 }
 
-/** Could this partial segment still turn into the metadata trailer? */
-function couldStartMeta(partial: string): boolean {
-  return partial.startsWith(META) || META.startsWith(partial);
+/** Could this partial segment still turn into a control frame? */
+function couldStartControl(partial: string): boolean {
+  return (
+    partial.startsWith(META) ||
+    META.startsWith(partial) ||
+    (partial.length < RESET.length && RESET.startsWith(partial)) ||
+    partial === RESET
+  );
 }
 
 export async function readTurnStream(body: ReadableStream<Uint8Array>, h: TurnHandlers) {
@@ -45,6 +60,10 @@ export async function readTurnStream(body: ReadableStream<Uint8Array>, h: TurnHa
 
   const handleSegment = (segment: string) => {
     if (!segment) return;
+    if (segment === RESET) {
+      h.onReset?.();
+      return;
+    }
     if (segment.startsWith(META)) {
       try {
         h.onMeta(JSON.parse(segment.slice(META.length)));
@@ -91,7 +110,7 @@ export async function readTurnStream(body: ReadableStream<Uint8Array>, h: TurnHa
     // The trailer is terminated on both sides (see `lib/agent/chat.ts`), so this
     // hold always resolves mid-stream. It previously did not: an unterminated
     // trailer stayed a plausible prefix forever and rode out to close (P0-5).
-    if (buffer && !(afterCtrl && couldStartMeta(buffer))) {
+    if (buffer && !(afterCtrl && couldStartControl(buffer))) {
       h.onText(buffer);
       buffer = "";
       afterCtrl = false;

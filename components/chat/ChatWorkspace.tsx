@@ -193,6 +193,11 @@ export default function ChatWorkspace({ userEmail }: { userEmail: string }) {
         onText: (t) => {
           if (current()) updateMessage(assistantId, (m) => ({ ...m, content: m.content + t }));
         },
+        // The step that produced this text turned out to call a tool, so the
+        // text was never part of the answer.
+        onReset: () => {
+          if (current()) updateMessage(assistantId, (m) => ({ ...m, content: "" }));
+        },
         // The trailer means the turn is complete: the answer and its sources are
         // final and both rows are written. Everything after it on the wire is
         // bookkeeping the user is not waiting for, so release the UI here rather
