@@ -416,16 +416,18 @@ export default function ChatWorkspace({
               actions: [{ name: TURN_FAILED, ok: false, error: "network" }],
             },
           ]);
-        } else if (!metaSeen) {
-          // The stream died after the first token. Without this the partial
-          // answer sits there looking finished — a reload would catch it, this
-          // path would not. The text stays (it may be useful) but is labelled.
-          updateMessage(assistantId, (m) => ({ ...m, truncated: true }));
         }
       }
     } finally {
-      // Idempotent backstop: a turn that dies before its trailer (network drop,
-      // a throw before `sendMeta`) must still hand the composer back.
+      // A turn is complete only if its trailer arrived. Checked here rather than
+      // in `catch`, because a stream can end *cleanly* without one — a killed
+      // function closes the response with no error to catch — and that case
+      // left the bubble looking finished until a reload revealed the gap.
+      if (current() && assistantAdded && !metaSeen) {
+        updateMessage(assistantId, (m) => ({ ...m, truncated: true }));
+      }
+      // Idempotent backstop: a turn that dies before its trailer must still
+      // hand the composer back.
       finishTurn();
     }
   }
@@ -574,7 +576,8 @@ export default function ChatWorkspace({
               // another generation and duplicate the question.
               const pending = m.gap === "pending";
               const failed =
-                m.role === "assistant" && (m.gap === "failed" || isFailedTurn(m.actions));
+                m.role === "assistant" &&
+                (m.gap === "failed" || isFailedTurn(m.actions) || (m.truncated && !m.content));
               return (
                 <div
                   key={m.id}

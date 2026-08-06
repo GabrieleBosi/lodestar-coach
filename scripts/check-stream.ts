@@ -147,6 +147,21 @@ async function main() {
     `text was NOT stalled by the RESET prefix check (@${rLike.textAt}ms)`,
   );
 
+  // Both chat clients treat "the trailer arrived" as the definition of a
+  // completed turn. A stream that ends *cleanly* without one — which is what a
+  // killed serverless function produces — must therefore never deliver META, or
+  // an incomplete turn would re-enable the composer as though it had worked.
+  console.log("── a stream that closes without a trailer");
+  const noTrailer = await run([answer]);
+  report("no trailer at all", noTrailer);
+  check(noTrailer.metaAt === null, "META was never delivered, so the turn reads as incomplete");
+  check(noTrailer.text === answer, "the partial answer is still delivered, to be labelled");
+
+  console.log("── a stream that closes with nothing at all");
+  const empty = await run([]);
+  check(empty.metaAt === null, "no META from an empty stream either");
+  check(empty.text === "", "and no phantom answer text");
+
   console.log(failures === 0 ? "\nRESULT: PASS ✅" : `\nRESULT: FAIL ❌ (${failures})`);
   if (failures > 0) process.exit(1);
 }
