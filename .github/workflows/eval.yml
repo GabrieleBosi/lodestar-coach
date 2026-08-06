@@ -17,7 +17,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # 22, not 20: @supabase/realtime-js requires a native WebSocket, which
+          # Node ships only from 22. On 20 both eval steps died at Supabase
+          # client construction, so zero cases ran and the gate never engaged.
+          node-version: "22"
           cache: "npm"
 
       - run: npm ci
