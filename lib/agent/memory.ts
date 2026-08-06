@@ -85,8 +85,54 @@ function parseFactArray(text: string): string[] {
 }
 
 /**
+ * Facts that live in the `profiles` table (weight, height, age, sex, goal,
+ * activity level, name) must NEVER be stored as memories: the profile is the
+ * authoritative, user-editable source and is always injected into the prompt,
+ * so a mirrored memory row can only drift and contradict it (issue #2, P0-2).
+ * The extraction prompt says so too, but prompts aren't reliable — this filter
+ * is the backstop.
+ */
+const PROFILE_OWNED_PATTERNS: RegExp[] = [
+  /\b(weighs?|weight\s+is|body\s?weight)\b/i,
+  /\b(height|\d+\s*cm\s+tall)\b/i,
+  /\b(\d+[\s-]?years?[\s-]?old|age\s+is|aged\s+\d+)\b/i,
+  /\b(is\s+)?(male|female)\b/i,
+  /\b(goal\s+(is|of)|goals?:)\b/i,
+  /\blean[\s-]?bulk/i,
+  /\b(cutting|bulking|maintaining)\s+(phase|goal)\b/i,
+  /\bactivity\s+level\b/i,
+  /\b(name\s+is|is\s+named|called)\b/i,
+];
+
+export function isProfileOwnedFact(fact: string): boolean {
+  return PROFILE_OWNED_PATTERNS.some((re) => re.test(fact));
+}
+
+/** Cosine similarity above which two memories are considered the same fact. */
+const DEDUPE_SIMILARITY = 0.9;
+
+function cosine(a: number[], b: number[]): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    dot += (a[i] ?? 0) * (b[i] ?? 0);
+    na += (a[i] ?? 0) ** 2;
+    nb += (b[i] ?? 0) ** 2;
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+/**
  * Extract durable facts/preferences from an exchange and store new ones.
- * Best-effort: failures are swallowed so they never break the chat response.
+ *
+ * Profile-owned facts are excluded entirely (see PROFILE_OWNED_PATTERNS — the
+ * agent's update_profile tool captures those into the profile instead). Each
+ * surviving fact is deduped by embedding similarity: if an existing memory is
+ * ≥ DEDUPE_SIMILARITY it is SUPERSEDED (old row deleted, new row inserted) so a
+ * restated fact stays single-row and an updated fact keeps only the newest
+ * value. Best-effort: failures are swallowed so they never break the response.
  */
 export async function extractAndStoreMemories(
   ctx: MemoryContext,
@@ -94,40 +140,61 @@ export async function extractAndStoreMemories(
   assistantAnswer: string,
 ): Promise<number> {
   try {
-    const prompt = `From the exchange below, extract durable facts or stable preferences about the USER that are worth remembering across future sessions (e.g., goals, dietary preferences/restrictions, injuries, equipment, personal records, biometrics, schedule). Ignore transient chit-chat and anything about the assistant. Return ONLY a JSON array of short first-person-free strings (e.g., "Prefers training in the morning"). Return [] if nothing durable.
+    const prompt = `From the exchange below, extract durable facts or stable preferences about the USER that are worth remembering across future sessions (e.g., dietary preferences/restrictions, injuries, equipment, personal records, schedule). Do NOT extract weight, height, age, sex, activity level, training goal, or name — those are stored in the user's profile, not in memory. Ignore transient chit-chat and anything about the assistant. Return ONLY a JSON array of short first-person-free strings (e.g., "Prefers training in the morning"). Return [] if nothing durable.
 
 User: ${userMessage}
 Assistant: ${assistantAnswer}`;
 
     const raw = await ctx.provider.generate(prompt, { temperature: 0 });
-    const facts = parseFactArray(raw);
+    const facts = parseFactArray(raw).filter((f) => !isProfileOwnedFact(f));
     if (facts.length === 0) return 0;
 
-    // Skip facts we already store verbatim.
-    const { data: existing } = await ctx.supabase
-      .from("memories")
-      .select("content")
-      .eq("user_id", ctx.userId);
-    const known = new Set((existing ?? []).map((r) => r.content.trim().toLowerCase()));
-    const fresh = facts.filter((f) => !known.has(f.toLowerCase()));
-    if (fresh.length === 0) return 0;
-
-    const embeddings = await ctx.provider.embed(fresh, {
+    const embeddings = await ctx.provider.embed(facts, {
       dimensions: EMBED_DIM,
       taskType: "RETRIEVAL_DOCUMENT",
     });
 
-    const rows = fresh.map((content, i) => ({
-      user_id: ctx.userId,
-      content,
-      embedding: JSON.stringify(embeddings[i] ?? []),
-      kind: "fact",
-      salience: 0.5,
-    }));
+    let stored = 0;
+    const batchKept: { content: string; embedding: number[] }[] = [];
 
-    const { error } = await ctx.supabase.from("memories").insert(rows);
-    if (error) return 0;
-    return rows.length;
+    for (let i = 0; i < facts.length; i++) {
+      const content = facts[i]!;
+      const embedding = embeddings[i] ?? [];
+      if (embedding.length === 0) continue;
+
+      // In-batch dedupe: the extractor sometimes restates one fact twice.
+      if (batchKept.some((k) => cosine(k.embedding, embedding) >= DEDUPE_SIMILARITY)) continue;
+
+      // Supersede any existing near-duplicate: newest value wins, one row per fact.
+      const { data: similar } = await ctx.supabase.rpc("match_memories", {
+        query_embedding: JSON.stringify(embedding),
+        match_count: 3,
+      });
+      const toSupersede = (similar ?? []).filter((m) => m.similarity >= DEDUPE_SIMILARITY);
+      if (toSupersede.length > 0) {
+        await ctx.supabase
+          .from("memories")
+          .delete()
+          .in(
+            "id",
+            toSupersede.map((m) => m.id),
+          );
+      }
+
+      const { error } = await ctx.supabase.from("memories").insert({
+        user_id: ctx.userId,
+        content,
+        embedding: JSON.stringify(embedding),
+        kind: "fact",
+        salience: 0.5,
+      });
+      if (!error) {
+        stored++;
+        batchKept.push({ content, embedding });
+      }
+    }
+
+    return stored;
   } catch {
     return 0;
   }

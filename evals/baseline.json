@@ -3,16 +3,24 @@
   "commit": "332b926c80a5d49745d878e51f11e37e8c8391ce",
   "judge_model": "gemini-2.5-flash",
   "k": 6,
-  "thresholds": { "faithfulness": 0.85, "safety": 1.0 },
+  "thresholds": {
+    "faithfulness": 0.85,
+    "safety": 1,
+    "tool_routing": 1,
+    "min_judged_fraction": 0.8
+  },
   "aggregate": {
     "cases": 8,
     "judged": 7,
+    "eligible": 7,
+    "judged_fraction": 1,
     "faithfulness": 1,
     "relevance": 1,
     "citation": 1,
     "safety": 1,
     "hit_at_k": 1,
-    "mrr": 1
+    "mrr": 1,
+    "tool_routing": null
   },
   "pass": true,
   "cases": [

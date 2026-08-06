@@ -23,6 +23,8 @@ export interface ToolContext {
   requestId: string;
   /** Accumulated citations (shared across search_knowledge calls). */
   citations: Citation[];
+  /** When true, update_profile refuses writes (the public demo's shared user). */
+  profileReadOnly?: boolean;
 }
 
 /** Register a chunk as a citation, returning its stable 1-based marker. */
@@ -323,10 +325,96 @@ const computeEnergyTargetsTool: AgentTool = {
   },
 };
 
+// ── update_profile ──────────────────────────────────────────────────────────
+const updateProfileSchema = z.object({
+  weight_kg: z.number().positive().max(500).optional(),
+  height_cm: z.number().positive().max(300).optional(),
+  age: z.number().int().positive().max(120).optional(),
+  sex: z.enum(["male", "female"]).optional(),
+  activity_level: z.enum(["sedentary", "light", "moderate", "active", "very_active"]).optional(),
+  goals: z.string().max(200).optional(),
+  display_name: z.string().max(80).optional(),
+});
+
+const updateProfile: AgentTool = {
+  name: "update_profile",
+  description:
+    "Save the user's stated biometrics or preferences (weight, height, age, sex, activity level, goals, name) to their profile — the single authoritative store for these facts. Call this whenever the user states or changes one of them; do NOT rely on conversational memory for profile facts.",
+  parameters: {
+    type: "object",
+    properties: {
+      weight_kg: { type: "number", description: "Body weight in kilograms" },
+      height_cm: { type: "number", description: "Height in centimeters" },
+      age: { type: "number" },
+      sex: { type: "string", enum: ["male", "female"] },
+      activity_level: {
+        type: "string",
+        enum: ["sedentary", "light", "moderate", "active", "very_active"],
+      },
+      goals: { type: "string", description: "Training/nutrition goal, e.g. 'lean bulk'" },
+      display_name: { type: "string", description: "What the user wants to be called" },
+    },
+  },
+  schema: updateProfileSchema,
+  async execute(args, ctx) {
+    const fields = updateProfileSchema.parse(args);
+    const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) {
+      return { data: { updated: [] }, summary: "update_profile → nothing to update" };
+    }
+    if (ctx.profileReadOnly) {
+      // Not framed as an error: an error reads as retryable, and the model then
+      // re-attempted the write on later, unrelated turns. This is terminal.
+      return {
+        data: {
+          saved: false,
+          terminal: true,
+          reason:
+            "This shared demo profile cannot be modified. Tell the user their details will not be saved in the demo and that signing in enables a personal profile. Do not attempt update_profile again in this conversation.",
+        },
+        summary: "update_profile → not saved (demo profile is read-only)",
+      };
+    }
+
+    // Only write fields that actually differ. A restated value from earlier in
+    // the conversation then costs nothing and reports honestly as "no change",
+    // instead of a misleading write chip.
+    const { data: current } = await ctx.supabase
+      .from("profiles")
+      .select("weight_kg, height_cm, age, sex, activity_level, goals, display_name")
+      .eq("id", ctx.userId)
+      .maybeSingle();
+
+    const changed = entries.filter(([k, v]) => {
+      const existing = (current ?? {})[k as keyof typeof current];
+      return existing == null || String(existing) !== String(v);
+    });
+
+    if (changed.length === 0) {
+      return {
+        data: { updated: [], unchanged: entries.map(([k]) => k) },
+        summary: `update_profile → no change (${entries.map(([k]) => k).join(", ")} already current)`,
+      };
+    }
+
+    const { error } = await ctx.supabase
+      .from("profiles")
+      .upsert({ id: ctx.userId, ...Object.fromEntries(changed) }, { onConflict: "id" });
+    if (error) throw new Error(error.message);
+
+    const updated = changed.map(([k]) => k);
+    return {
+      data: { updated },
+      summary: `update_profile(${updated.join(", ")})`,
+    };
+  },
+};
+
 export const AGENT_TOOLS: AgentTool[] = [
   searchKnowledge,
   logWorkout,
   logNutrition,
   getHistory,
   computeEnergyTargetsTool,
+  updateProfile,
 ];

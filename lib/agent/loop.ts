@@ -185,9 +185,15 @@ export async function runAgent(params: {
   const cfg = readGeminiConfig();
   const ai = new GoogleGenAI(geminiClientOptions(cfg));
 
+  // A capability the caller can't use is withheld, not refused: exposing
+  // update_profile to the read-only demo user produced a refusal the model then
+  // retried on later, unrelated turns. Absent tools can't be retried.
+  const available = AGENT_TOOLS.filter(
+    (t) => !(ctx.profileReadOnly && t.name === "update_profile"),
+  );
   const tools = [
     {
-      functionDeclarations: AGENT_TOOLS.map((t) => ({
+      functionDeclarations: available.map((t) => ({
         name: t.name,
         description: t.description,
         parametersJsonSchema: t.parameters,

@@ -3,6 +3,12 @@ name: Eval
 on:
   pull_request:
     branches: [main]
+  # Nightly + on-demand runs exercise the FULL golden set; PRs run the fast
+  # subset below (EVAL_SUBSET) so a per-PR gate stays minutes, not ~20 minutes,
+  # and touches fewer model calls (less 503 exposure).
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 # Allow the workflow to comment on the PR.
 permissions:
@@ -12,12 +18,21 @@ permissions:
 jobs:
   eval:
     runs-on: ubuntu-latest
+    env:
+      # PR runs: 3 tool-routing cases + 6 representatives, one per category.
+      # Empty on schedule/dispatch, which runs every case.
+      EVAL_SUBSET: >-
+        ${{ github.event_name == 'pull_request' &&
+        'tool-01,tool-02,tool-03,in-03,in-10,in-15,out-01,unsafe-01,insuf-01' || '' }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # 22, not 20: @supabase/realtime-js requires a native WebSocket, which
+          # Node ships only from 22. On 20 both eval steps died at Supabase
+          # client construction, so zero cases ran and the gate never engaged.
+          node-version: "22"
           cache: "npm"
 
       - run: npm ci
@@ -39,7 +54,23 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
+          EVAL_IDS: ${{ env.EVAL_SUBSET }}
+          # The PR checkout is an ephemeral merge commit; record the real head.
+          EVAL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: npm run eval
+
+      # Deterministic memory invariants (issue #2, P0-2): profile-owned facts
+      # never become memories; restated facts don't duplicate.
+      - name: Memory invariants
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_CHAT_MODEL: gemini-3.6-flash
+          GEMINI_EMBED_MODEL: gemini-embedding-2
+          EMBED_DIM: "1536"
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run eval:memory
 
       - name: Comment scores on PR
         if: always()
@@ -59,10 +90,18 @@ jobs:
               const a = report.aggregate;
               const b = baseline && baseline.aggregate ? baseline.aggregate : null;
               const t = report.thresholds;
+              // A delta is only meaningful when the same judge scored both runs.
+              // The fallback chain can silently swap the judge, so differencing
+              // across judges renders a real change as "no change".
+              const comparable = !!baseline && baseline.judge_model === report.judge_model;
               const row = (label, key, thr) => {
                 const cur = a[key];
+                if (cur == null) return `| ${label} | — | — | ${thr ?? "—"} | — |`;
                 const base = b ? b[key] : null;
-                const delta = base == null ? "" : ` (${cur - base >= 0 ? "+" : ""}${(cur - base).toFixed(3)})`;
+                const delta =
+                  base == null || !comparable
+                    ? ""
+                    : ` (${cur - base >= 0 ? "+" : ""}${(cur - base).toFixed(3)})`;
                 const flag = thr != null ? (cur >= thr ? "✅" : "❌") : "";
                 return `| ${label} | ${cur}${delta} | ${base == null ? "—" : base} | ${thr ?? "—"} | ${flag} |`;
               };
@@ -70,7 +109,23 @@ jobs:
                 marker,
                 `### 🧪 Lodestar eval — ${report.pass ? "**PASS ✅**" : "**FAIL ❌**"}`,
                 "",
-                `judge: \`${report.judge_model}\` · cases: ${a.cases} · commit: \`${String(report.commit).slice(0, 7)}\``,
+                `judge: \`${report.judge_model}\` · cases: ${a.cases} · **judged ${a.judged}/${a.eligible}** eligible · commit: \`${String(report.commit).slice(0, 7)}\``,
+                a.eligible > 0 && (a.judged_fraction ?? 0) < (t.min_judged_fraction ?? 0.8)
+                  ? `\n> ⚠️ **Coverage below ${t.min_judged_fraction ?? 0.8}** — too many cases were skipped (API errors/quota), so the judge metrics are not trustworthy and this check fails closed.`
+                  : "",
+                Object.entries(a.categories || {}).some(([, c]) => c.eligible > 0 && c.judged === 0)
+                  ? `\n> ⚠️ **A category went unmeasured:** ${Object.entries(a.categories).filter(([, c]) => c.eligible > 0 && c.judged === 0).map(([n, c]) => `${n} ${c.judged}/${c.eligible}`).join(", ")}. Its thresholds would be enforced over nothing, so this check fails closed.`
+                  : "",
+                report.judge_downgraded
+                  ? `\n> ⚠️ **Judge downgraded** to \`${report.judge_model}\` (asked for \`${report.judge_model_intended}\`) — faithfulness/safety are not comparable with runs judged by the intended model.`
+                  : "",
+                a.categories
+                  ? `\nper-category judged: ${Object.entries(a.categories).map(([n, c]) => `${n} ${c.judged}/${c.eligible}`).join(" · ")}`
+                  : "",
+                "",
+                comparable
+                  ? ""
+                  : `\n> ℹ️ Deltas suppressed: baseline was judged by \`${baseline ? baseline.judge_model : "n/a"}\`, this run by \`${report.judge_model}\`. Scores from different judges aren't comparable.`,
                 "",
                 `| Metric | This PR | main (baseline) | Threshold | Gate |`,
                 `| --- | --- | --- | --- | --- |`,
@@ -80,6 +135,7 @@ jobs:
                 row("Citation correctness", "citation", null),
                 row("Retrieval hit@k", "hit_at_k", null),
                 row("Retrieval MRR", "mrr", null),
+                row("Tool routing", "tool_routing", t.tool_routing ?? null),
               ].join("\n");
             }
 

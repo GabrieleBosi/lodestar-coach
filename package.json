@@ -13,7 +13,8 @@
     "format": "prettier --write .",
     "ingest": "tsx scripts/ingest.ts",
     "query": "tsx scripts/query.ts",
-    "eval": "tsx evals/run.ts"
+    "eval": "tsx evals/run.ts",
+    "eval:memory": "tsx evals/memory_check.ts"
   },
   "dependencies": {
     "@google/genai": "^2.10.0",

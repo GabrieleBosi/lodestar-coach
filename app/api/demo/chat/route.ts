@@ -95,6 +95,7 @@ export async function POST(request: Request) {
     message,
     history,
     extractMemory: false,
+    profileReadOnly: true,
     stage: "demo.request",
   });
 }
