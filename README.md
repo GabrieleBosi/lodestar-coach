@@ -38,7 +38,7 @@ together as a real, deployed product with observability and cost controls.
 - **Safety** — refuses diagnosis / out-of-scope requests and responds supportively (never
   with harmful specifics) to unsafe intent; energy targets are clamped to safe ranges.
 - **Production polish** — full request **tracing**, an admin **metrics dashboard**,
-  response/embedding **caching**, **rate limiting**, graceful **degradation**, and a
+  **embedding caching**, a **rate limit** on the public demo, graceful **degradation**, and a
   no-signup **demo**.
 
 ## Architecture
@@ -49,10 +49,11 @@ flowchart TB
   KB["knowledge/*.md"] -->|"npm run ingest"| DB[("Supabase<br/>Postgres + pgvector")]
 
   APP --> CHAT["/api/chat · /api/demo/chat"]
-  CHAT --> GUARD["rate limit · cache"]
+  CHAT --> GUARD["rate limit"]
   CHAT --> AGENT["Agent loop<br/>Gemini function calling"]
 
   AGENT -->|search_knowledge| RET["Hybrid retrieval (RRF)<br/>vector + keyword"]
+  RET -->|embed query| EC["Embedding cache"] --> DB
   RET --> DB
   AGENT -->|"log / history / energy"| DB
   AGENT --> MEM["Long-term memory"] --> DB
@@ -139,9 +140,12 @@ All environment variables are documented in [`.env.example`](.env.example).
 
 ## Engineering decisions & trade-offs
 
-- **Provider-agnostic LLM interface.** The app depends on an `LLMProvider` interface, not
-  the vendor SDK, so the model is swappable. Trade-off: agent function-calling is
-  Gemini-specific and lives in `lib/agent`, outside the abstraction.
+- **Partly provider-agnostic LLM interface.** The RAG and embedding layer depends on an
+  `LLMProvider` interface rather than the vendor SDK, so that half is swappable. The **agent
+  loop is not**: `lib/agent/loop.ts` calls `ai.models.generateContent` directly, because it
+  depends on Gemini's function-calling types. Routing it through the interface would mean
+  generalising those types, so the honest description today is "provider-agnostic retrieval,
+  Gemini-specific agent" rather than a clean abstraction throughout.
 - **Hybrid retrieval with RRF.** Combining dense (pgvector) and lexical
   (Postgres full-text) search with Reciprocal Rank Fusion avoids normalizing two very
   different score scales and catches both semantic and exact-term matches.
@@ -153,8 +157,10 @@ All environment variables are documented in [`.env.example`](.env.example).
   behaving. The system prompt handles refusals and disclaimers.
 - **Eval as a CI gate.** Faithfulness and safety thresholds fail the PR check, so quality
   regressions can't merge. Trade-off: CI needs API secrets and is subject to free-tier limits.
-- **Cost controls.** Every call is traced (real token usage) and embeddings/generations are
-  cached by input hash; the metrics dashboard makes spend visible.
+- **Cost controls.** Every call is traced with real token usage from the API response, and
+  **embeddings** are cached by input hash; the metrics dashboard makes spend visible.
+  Generation is deliberately not cached — caching coaching answers is a product decision, not
+  a free optimisation, and the cache key can't see the user's logged data.
 - **RLS everywhere.** Users can only read/write their own rows; the service-role key is
   `import "server-only"` so it can never reach the client bundle.
 
@@ -177,7 +183,7 @@ app/            Next.js routes — landing, /demo, /login, /app (chat), /app/met
                 /profile, /memories, and API routes (chat, demo, metrics, profile, …)
 components/     React UI (chat, demo, metrics dashboard, profile form, …)
 lib/
-  llm/          provider-agnostic LLM layer (Gemini impl, caching, cost)
+  llm/          LLM layer (Gemini impl, embedding cache, cost)
   rag/          chunking, ingestion, hybrid retrieval, grounded prompt
   agent/        function-calling loop, tools, memory, rate limiting
   db/           Supabase clients (browser/server/admin) + generated types

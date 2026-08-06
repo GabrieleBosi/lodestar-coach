@@ -8,7 +8,7 @@ import { createSupabaseServerClient } from "@/lib/db/supabase";
 import { streamTurn } from "@/lib/agent/chat";
 import { isRateLimited } from "@/lib/agent/ratelimit";
 import { getLLMProvider } from "@/lib/llm";
-import { CachingProvider } from "@/lib/llm/cache";
+import { EmbeddingCache } from "@/lib/llm/cache";
 import { readGeminiConfig } from "@/lib/llm/gemini";
 
 export const runtime = "nodejs";
@@ -86,9 +86,10 @@ export async function POST(request: Request) {
   });
   if (userMsgErr) return NextResponse.json({ error: userMsgErr.message }, { status: 500 });
 
-  // Wrap the provider with the shared cache (cuts embedding cost on repeats).
+  // Wrap the provider with the shared EMBEDDING cache. Generation is not cached
+  // — see lib/llm/cache.ts and issue #2 (P0-8/P0-9).
   const cfg = readGeminiConfig();
-  const provider = new CachingProvider(
+  const provider = new EmbeddingCache(
     getLLMProvider(),
     createSupabaseAdminClient(),
     cfg.embedModel,
