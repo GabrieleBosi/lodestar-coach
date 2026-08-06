@@ -43,16 +43,38 @@ function BarChart({ data, label }: { data: { label: string; value: number }[]; l
       {data.length === 0 ? (
         <p className="text-xs text-stone-500">No data yet.</p>
       ) : (
+        // A three-column grid, not a flex row. The row used to be
+        // `w-20 shrink-0` for the label with no overflow handling, so a name
+        // longer than 80px — `compute_energy_targets` is 22 characters — spilled
+        // out of its box and rendered underneath the bar and the value, leaving
+        // neither readable. The bar's percentage also resolved against the whole
+        // row rather than the space left over, so it competed with the label and
+        // the value for width: the longest bar asked for more room than was left,
+        // flexbox shrank it back, and every bar's length drifted off its true
+        // fraction (a 15.9% bar measured 17.4% of the longest).
+        //
+        // Grid columns cannot overlap, the label column truncates rather than
+        // spilling, and the bar sits inside a track that owns exactly the
+        // remaining space, so `value / max` is now the fraction of that track.
         <ul className="space-y-1">
           {data.map((d) => (
-            <li key={d.label} className="flex items-center gap-2 text-xs">
-              <span className="w-20 shrink-0 text-stone-500">{d.label}</span>
+            <li
+              key={d.label}
+              className="grid grid-cols-[minmax(0,9rem)_1fr_auto] items-center gap-2 text-xs"
+            >
+              <span className="truncate text-stone-500" title={d.label}>
+                {d.label}
+              </span>
               <span
-                className="h-4 rounded bg-emerald-500/80"
-                style={{ width: `${(d.value / max) * 100}%`, minWidth: d.value ? "2px" : "0" }}
+                className="h-4 w-full"
                 role="img"
                 aria-label={`${d.label}: ${formatCount(d.value)}`}
-              />
+              >
+                <span
+                  className="block h-full rounded bg-emerald-500/80"
+                  style={{ width: `${(d.value / max) * 100}%`, minWidth: d.value ? "2px" : "0" }}
+                />
+              </span>
               <span className="tabular-nums text-stone-600 dark:text-stone-300">
                 {formatCount(d.value)}
               </span>

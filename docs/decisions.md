@@ -189,8 +189,15 @@ authenticated app.
 
 The figure sizes the bug; it does not measure production. This is single-user
 data dominated by our own testing, and the before/after split is the honest form
-of the claim — an earlier "17% of production conversations" did not reproduce
-against the database and has been withdrawn.
+of the claim.
+
+An earlier version of this entry said "15 of 86 conversations (17%)". That did
+not reproduce, and the reason is worth keeping: **15 was the turn count and 86
+was the conversation count** — a ratio built from two different denominators.
+It survived review because 17% is a plausible-looking number and nothing in the
+sentence revealed that its numerator and denominator counted different things.
+That is why the corrected version states both denominators explicitly, and why
+a rate quoted here should always name what it is a rate _of_.
 
 **Consequences of not aborting.** A healthy turn now leaves a question with no
 answer row for its whole duration, so "no answer row" cannot mean "failed" on
