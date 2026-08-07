@@ -43,7 +43,7 @@ product with tracing, cost controls and a public demo.
   retracted, because only the step that stops calling tools is the answer.
 - **Long-term memory** — durable preferences are extracted, embedded and recalled across
   sessions, with supersede-on-conflict so a corrected fact replaces the stale one.
-- **Evaluation harness** — 35 golden cases scored on retrieval (hit@k / MRR) and, via an
+- **Evaluation harness** — 36 golden cases scored on retrieval (hit@k / MRR) and, via an
   **LLM-as-judge**, on faithfulness, citation correctness, relevance and safety. Results
   persist to the database and **gate pull requests**, fail-closed: a run that judges too
   little fails rather than passing on an empty average.
@@ -90,12 +90,12 @@ each with the evidence that produced it and what would reverse it.
 ## Evaluation results
 
 `npm run eval` scores the pipeline against [`evals/dataset.jsonl`](evals/dataset.jsonl) —
-35 cases across five categories (in-scope, out-of-scope, unsafe, insufficient-context,
+36 cases across five categories (in-scope, out-of-scope, unsafe, insufficient-context,
 tool-routing) — and blocks regressions in CI.
 
-Latest run — commit `c2fbe28`, the **nine-case PR subset** (three tool-routing cases plus
-one representative per category), with all 6 judge-eligible cases judged and every
-category covered:
+Current baseline — commit `6422a13`, the **full 36-case set**, judged by
+`gemini-3.6-flash` with **31 of 31 judge-eligible cases judged** and every category
+complete (in-scope 19/19, out-of-scope 4/4, unsafe 4/4, insufficient 4/4):
 
 | Metric               | Score    | Threshold |
 | -------------------- | -------- | --------- |
@@ -106,23 +106,23 @@ category covered:
 | Answer relevance     | 1.00     | —         |
 | Citation correctness | 1.00     | —         |
 | Retrieval hit@6      | 1.00     | —         |
-| Retrieval MRR        | 1.00     | —         |
+| Retrieval MRR        | 0.974    | —         |
 
-> **The judge was downgraded on this run.** It asked for `gemini-3.1-pro` and scored with
-> `gemini-3.5-flash`, which the harness records because scores from different judges are
-> not comparable. A pull request runs the subset above; the **full 35-case set** runs
-> nightly. `evals/baseline.json` still holds an older run judged by a different model, so
-> PR deltas stay suppressed until it is re-judged.
+The judge is pinned via the `EVAL_JUDGE_MODEL` repo variable to the model the key can
+actually reach, so the intended judge and the actual judge agree, runs are comparable
+run-to-run, and **PR deltas against this baseline are live**. If a run ever falls back
+to a different judge, the report records the downgrade and the PR comment states the
+scores are not comparable — measured honestly rather than averaged over quietly.
 
 Thresholds live in [`evals/thresholds.json`](evals/thresholds.json) and are enforced
 fail-closed: fewer than 80% of judge-eligible cases actually judged, or any category with
 no judged case at all, fails the run rather than averaging over whatever survived.
 
-> The Gemini **free-tier** key has no access to `pro` judge models and caps each `flash`
-> model at roughly 20 requests/day, so a full 35-case run cannot complete in one day on
-> it. The harness judges as many cases as quota allows, records whether the judge was
-> downgraded, and always writes a report. Point `EVAL_JUDGE_MODEL` at a `pro` model on a
-> paid key for the full suite.
+> A pull request runs an **11-case subset** (all five tool-routing cases plus one
+> representative per category) so the gate stays minutes rather than tens of minutes;
+> the **full 36-case set** runs nightly and on `workflow_dispatch`. The harness judges
+> as many cases as quota allows and always writes a report — but a run that judges too
+> few **fails**, it does not pass on what survived.
 
 ## Interface diagrams
 
@@ -173,15 +173,23 @@ npm run ingest
 npm run dev            # → http://localhost:3000
 ```
 
-Checks — the first four run in CI, the rest need real credentials and are manual:
+Checks. The first block needs no credentials and runs in CI on every pull request:
 
 ```bash
 npm run lint && npm run typecheck && npm run build
-npm run check:stream    # chat wire format — replays the parser, no network
-npm run check:gaps      # unanswered-turn detection — pure function, no network
-npm run eval            # scored eval report (Gemini + service-role keys)
-npm run eval:memory     # memory dedupe and supersede behaviour
-npm run check:cache     # embedding-cache correctness (service role)
+npm run check:stream      # chat wire format — replays the parser, no network
+npm run check:gaps        # unanswered-turn detection — pure function
+npm run check:grounding   # retrieval coverage floor + LaTeX mapper — pure functions
+```
+
+The second needs real keys; `eval`, `eval:memory` and `check:scoping` also run in the
+CI eval job, which gates pull requests:
+
+```bash
+npm run eval              # scored eval report (Gemini + service-role keys)
+npm run eval:memory       # memory dedupe and supersede behaviour
+npm run check:scoping     # cross-user isolation on the service-role client
+npm run check:cache       # embedding-cache correctness (service role)
 npm run query -- "how should I structure a deload week?"   # retrieval smoke test
 ```
 
@@ -261,22 +269,14 @@ status report rather than a retrospective.
   parser, the failure marker and the length limits. Three fixes have now had to be
   applied twice, and each time the public demo was the one left behind. Consolidating
   them is the real fix; until then, a change to one is a change to both.
-- **No required status checks.** GitHub reports "All checks have passed" over
-  whichever checks reported, so during an Actions outage a pull request can show green
-  on its deploy checks alone while `build` and `eval` never ran — and `main` can carry
-  commits no workflow ever verified. Same shape as the eval gate's old
-  zero-cases-passes bug, one level up. See
-  [decision 7](docs/decisions.md#7--a-green-pull-request-is-not-a-green-build).
 - **No unit test suite.** Correctness is guarded by the eval harness and by targeted
-  scripts. `check:stream` and `check:gaps` need no credentials and run in CI;
-  `check:cache`, `eval` and `eval:memory` need real keys and are manual.
-- **The eval baseline is stale.** `evals/baseline.json` predates the tool-routing fix and
-  was judged by a different model, so PR deltas are suppressed until it is re-judged. The
-  run quoted under [Evaluation results](#evaluation-results) is current but is the
-  nine-case PR subset, not the full set.
-- **The knowledge base is a seed set.** 11 documents. A predictable question outside it —
-  "is creatine safe?" — correctly returns a refusal rather than an answer, which is the
-  right behaviour but a coverage gap.
+  scripts. `check:stream`, `check:gaps` and `check:grounding` need no credentials and
+  run in CI on every PR; `eval`, `eval:memory` and `check:scoping` run in the CI eval
+  job with real keys; `check:cache` is manual.
+- **The knowledge base is a seed set.** 12 documents. Anything outside it returns a
+  grounded refusal rather than an invented answer — the eval keeps two off-corpus
+  canaries (HMB, beta-alanine) to hold that line — but a seed set is still a coverage
+  ceiling, not a library.
 - **Visual design is unaddressed.** Spacing, type scale, sidebar date grouping and the
   metrics chart labels are tracked in
   [#3](https://github.com/GabrieleBosi/lodestar-coach/issues/3). This README describes

@@ -289,6 +289,12 @@ and `eval` required. That is a repository setting rather than a code change, so
 it cannot be made in a pull request; until it is set, this entry is the record
 that the badge is not load-bearing.
 
+**Reversed 2026-08-07.** A ruleset on the default branch now requires the
+`build` and `eval` check runs, enforcement active. Verified in practice the same
+day: a pull request with a red `eval` reported `state=BLOCKED` and could not be
+merged until the check passed. The badge is load-bearing now; this entry stays
+as the record of when it wasn't.
+
 ---
 
 ## 8 · A cancelled job with no steps is not a result
