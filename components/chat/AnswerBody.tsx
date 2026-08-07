@@ -13,6 +13,9 @@ import { cloneElement, isValidElement, Fragment, type ReactElement, type ReactNo
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { citedNumbers, MARKER, numbersIn } from "@/lib/citations";
+import { stripLatex } from "@/lib/text/latex";
+
 export interface Citation {
   n: number;
   chunkId?: string;
@@ -21,26 +24,7 @@ export interface Citation {
   heading: string | null;
 }
 
-/**
- * A citation marker. The model groups references — `[1, 3]` is as common as
- * `[1][3]` — so the group is captured whole and split, rather than assuming one
- * number per bracket. Matching only `[n]` silently drops every grouped source.
- */
-const MARKER = /\[(\d+(?:\s*,\s*\d+)*)\]/g;
-
-function numbersIn(group: string): number[] {
-  return group
-    .split(",")
-    .map((s) => Number(s.trim()))
-    .filter((n) => Number.isInteger(n));
-}
-
-/** The citation numbers the answer text actually references. */
-export function citedNumbers(text: string): Set<number> {
-  const out = new Set<number>();
-  for (const m of text.matchAll(MARKER)) for (const n of numbersIn(m[1] ?? "")) out.add(n);
-  return out;
-}
+export { citedNumbers };
 
 /**
  * Sources the answer actually cites, in citation order.
@@ -137,20 +121,23 @@ type Resolve = (n: number) => Citation | undefined | null;
 
 function decorate(node: ReactNode, resolve: Resolve, key: string): ReactNode {
   if (typeof node === "string") {
-    if (!node.includes("[")) return node;
+    // Math first: the markers are resolved against the text the reader sees, and
+    // this walk only reaches prose (OPAQUE keeps it out of code, pre and links).
+    const text = stripLatex(node);
+    if (!text.includes("[")) return text;
     const out: ReactNode[] = [];
     let last = 0;
-    for (const m of node.matchAll(MARKER)) {
+    for (const m of text.matchAll(MARKER)) {
       const at = m.index ?? 0;
-      if (at > last) out.push(node.slice(last, at));
+      if (at > last) out.push(text.slice(last, at));
       // `[1, 3]` becomes two independently resolvable markers.
       for (const n of numbersIn(m[1] ?? "")) {
         out.push(<CitationMarker key={`${key}-${at}-${n}`} n={n} source={resolve(n)} />);
       }
       last = at + m[0].length;
     }
-    if (last === 0) return node;
-    if (last < node.length) out.push(node.slice(last));
+    if (last === 0) return text;
+    if (last < text.length) out.push(text.slice(last));
     return <Fragment key={key}>{out}</Fragment>;
   }
   if (Array.isArray(node)) return node.map((c, i) => decorate(c, resolve, `${key}-${i}`));
@@ -179,10 +166,16 @@ export default function AnswerBody({
 
   // Citations appear in prose, so paragraphs, list items and table cells are
   // the containers worth walking; the walk recurses through inline markup.
+  // Headings carry no citations but can carry a unit or an inequality, and the
+  // same walk is what applies stripLatex.
   const components: Components = {
     p: ({ children }) => <p>{decorate(children, resolve, "p")}</p>,
     li: ({ children }) => <li>{decorate(children, resolve, "li")}</li>,
     td: ({ children }) => <td>{decorate(children, resolve, "td")}</td>,
+    th: ({ children }) => <th>{decorate(children, resolve, "th")}</th>,
+    h2: ({ children }) => <h2>{decorate(children, resolve, "h2")}</h2>,
+    h3: ({ children }) => <h3>{decorate(children, resolve, "h3")}</h3>,
+    h4: ({ children }) => <h4>{decorate(children, resolve, "h4")}</h4>,
   };
 
   return (

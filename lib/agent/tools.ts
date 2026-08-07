@@ -92,6 +92,25 @@ const searchKnowledge: AgentTool = {
   async execute(args, ctx) {
     const { query } = searchSchema.parse(args);
     const chunks = await retrieve(ctx.supabase, ctx.provider, query, 6);
+
+    // No coverage is a RESULT, not an error. Framed as an error the model
+    // treats it as retryable and rephrases the same off-corpus query until it
+    // gives up and answers from training data anyway; framed as a terminal
+    // fact about the knowledge base, it has somewhere to go. Note there are no
+    // markers to hand back — that is the point, and it is stated so the model
+    // does not invent one.
+    if (chunks.length === 0) {
+      return {
+        data: {
+          results: [],
+          grounded: false,
+          instruction:
+            "The knowledge base contains nothing relevant to this query, so no sources and NO citation markers exist for it. Do not answer from your own knowledge and do not write any [n] marker. Tell the user this topic is not covered by your knowledge base, offer the areas you can ground (training, nutrition, recovery, sleep, hydration), and keep the not-medical-advice reminder.",
+        },
+        summary: `search_knowledge("${query}") → 0 chunk(s) (not covered by the knowledge base)`,
+      };
+    }
+
     const results = chunks.map((c) => ({
       marker: cite(ctx, c),
       title: c.title,
@@ -210,10 +229,18 @@ const getHistory: AgentTool = {
     const since = isoDaysAgo(daysFromRange(range, 56));
     const isNutrition = /nutrition|diet|food|calorie|macro/i.test(metric);
 
+    // `user_id` is filtered EXPLICITLY, not left to RLS. This tool also runs on
+    // the public demo, which executes on the service-role client — and the
+    // service role bypasses RLS entirely. With only the date predicate, both
+    // branches returned every user's rows, and the demo answered a stranger's
+    // question with a real user's training log. Any read that can reach a
+    // service-role client must carry its own ownership predicate; RLS is the
+    // second lock, never the only one.
     if (isNutrition) {
       const { data, error } = await ctx.supabase
         .from("nutrition_logs")
         .select("date, notes, payload")
+        .eq("user_id", ctx.userId)
         .gte("date", since)
         .order("date", { ascending: true });
       if (error) throw new Error(error.message);
@@ -226,6 +253,7 @@ const getHistory: AgentTool = {
     let q = ctx.supabase
       .from("workouts")
       .select("date, type, notes, payload")
+      .eq("user_id", ctx.userId)
       .gte("date", since)
       .order("date", { ascending: true });
     const generic = /^(workouts?|training|sessions?|all)$/i.test(metric.trim());

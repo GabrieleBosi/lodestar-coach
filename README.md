@@ -30,7 +30,11 @@ product with tracing, cost controls and a public demo.
 - **Grounded RAG** — hybrid **vector + keyword** retrieval fused with Reciprocal Rank
   Fusion over a curated knowledge base. The model answers _only_ from retrieved context
   and cites each claim `[n]`, or says it lacks grounded information rather than inventing
-  an answer.
+  an answer. A query the corpus does not cover returns **zero** chunks — a nearest-
+  neighbour search always has a nearest neighbour, so results must clear a lexical match
+  or a measured similarity floor to count as grounding. The model is then handed no
+  citation markers at all, which is what makes "don't cite what you weren't given"
+  enforceable rather than merely requested.
 - **Agentic tools** — Gemini **function calling** in a manual multi-step loop over six
   tools: `search_knowledge`, `log_workout`, `log_nutrition`, `get_history`,
   `compute_energy_targets` (Mifflin–St Jeor with safety clamps) and `update_profile`.
@@ -39,7 +43,7 @@ product with tracing, cost controls and a public demo.
   retracted, because only the step that stops calling tools is the answer.
 - **Long-term memory** — durable preferences are extracted, embedded and recalled across
   sessions, with supersede-on-conflict so a corrected fact replaces the stale one.
-- **Evaluation harness** — 33 golden cases scored on retrieval (hit@k / MRR) and, via an
+- **Evaluation harness** — 35 golden cases scored on retrieval (hit@k / MRR) and, via an
   **LLM-as-judge**, on faithfulness, citation correctness, relevance and safety. Results
   persist to the database and **gate pull requests**, fail-closed: a run that judges too
   little fails rather than passing on an empty average.
@@ -86,7 +90,7 @@ each with the evidence that produced it and what would reverse it.
 ## Evaluation results
 
 `npm run eval` scores the pipeline against [`evals/dataset.jsonl`](evals/dataset.jsonl) —
-33 cases across five categories (in-scope, out-of-scope, unsafe, insufficient-context,
+35 cases across five categories (in-scope, out-of-scope, unsafe, insufficient-context,
 tool-routing) — and blocks regressions in CI.
 
 Latest run — commit `c2fbe28`, the **nine-case PR subset** (three tool-routing cases plus
@@ -106,7 +110,7 @@ category covered:
 
 > **The judge was downgraded on this run.** It asked for `gemini-3.1-pro` and scored with
 > `gemini-3.5-flash`, which the harness records because scores from different judges are
-> not comparable. A pull request runs the subset above; the **full 33-case set** runs
+> not comparable. A pull request runs the subset above; the **full 35-case set** runs
 > nightly. `evals/baseline.json` still holds an older run judged by a different model, so
 > PR deltas stay suppressed until it is re-judged.
 
@@ -115,7 +119,7 @@ fail-closed: fewer than 80% of judge-eligible cases actually judged, or any cate
 no judged case at all, fails the run rather than averaging over whatever survived.
 
 > The Gemini **free-tier** key has no access to `pro` judge models and caps each `flash`
-> model at roughly 20 requests/day, so a full 33-case run cannot complete in one day on
+> model at roughly 20 requests/day, so a full 35-case run cannot complete in one day on
 > it. The harness judges as many cases as quota allows, records whether the judge was
 > downgraded, and always writes a report. Point `EVAL_JUDGE_MODEL` at a `pro` model on a
 > paid key for the full suite.
@@ -241,10 +245,11 @@ status report rather than a retrospective.
   heuristic standing in for turn status the database doesn't store; it resolves within a
   60s window and disappears with
   [#8](https://github.com/GabrieleBosi/lodestar-coach/issues/8).
-- **Citations are prompt-enforced, not validated.** Nothing checks that an `[n]` marker
-  corresponds to a retrieved chunk. The eval measures it after the fact and the UI marks
-  an unmatched marker as unresolved rather than rendering it as a working reference —
-  neither prevents it.
+- **Citations are prompt-enforced, not validated.** Retrieval now withholds chunks for a
+  query the corpus does not cover, so an off-corpus answer has no markers to attach — but
+  within a covered answer, nothing checks that a given `[n]` points at the chunk that
+  supports _that_ claim. The eval measures it after the fact and the UI strikes through an
+  unmatched marker rather than rendering it as a working reference; neither prevents it.
 - **The embedding cache has no TTL and no eviction.** Rows live forever. Fine at this
   size; not a managed cache.
 - **The demo rate limit is global.** 40 requests per 10 minutes across _all_ visitors — a

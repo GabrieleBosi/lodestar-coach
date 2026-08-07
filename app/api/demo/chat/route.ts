@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 
 import { createSupabaseAdminClient } from "@/lib/db/admin";
 import { streamTurn } from "@/lib/agent/chat";
+import { resolveDemoConversation } from "@/lib/agent/demo";
 import { MAX_DEMO_MESSAGE_LEN as MAX_MESSAGE_LEN } from "@/lib/limits";
 import { isRateLimited } from "@/lib/agent/ratelimit";
 import { getLLMProvider } from "@/lib/llm";
@@ -56,7 +57,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "message is required" }, { status: 400 });
   }
 
-  let convoId = conversationId;
+  // Verified, not trusted: this route holds the service-role client, so the
+  // conversation id in the body is checked against the demo user explicitly.
+  // See lib/agent/demo.ts.
+  let convoId = await resolveDemoConversation(supabase, DEMO_USER_ID, conversationId);
   if (!convoId) {
     const { data, error } = await supabase
       .from("conversations")

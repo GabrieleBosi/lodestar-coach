@@ -51,6 +51,19 @@ export async function getPersonalizationContext(
   return lines.join("\n");
 }
 
+/**
+ * Nearest memories for the user.
+ *
+ * `match_memories` scopes itself with `m.user_id = auth.uid()` inside the SQL
+ * function, so this call has no ownership predicate of its own. On the public
+ * demo — which runs on the service-role client — `auth.uid()` is NULL and the
+ * function returns nothing. That is the SAFE direction of the same assumption
+ * that leaked training logs through `get_history`: it fails closed (the demo
+ * simply gets no memories) rather than open. It is called out here because the
+ * assumption is invisible at the call site, which is exactly why the other one
+ * survived review. If demo personalization is ever wanted, the fix is to pass
+ * `ctx.userId` into the function explicitly — not to widen the SQL filter.
+ */
 async function retrieveMemories(ctx: MemoryContext, query: string): Promise<string> {
   try {
     const [embedding] = await ctx.provider.embed([query], {
