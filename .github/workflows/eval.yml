@@ -24,11 +24,18 @@ jobs:
   eval:
     runs-on: ubuntu-latest
     env:
-      # PR runs: 3 tool-routing cases + 6 representatives, one per category.
+      # PR runs: 5 tool-routing cases + 6 representatives, one per category.
       # Empty on schedule/dispatch, which runs every case.
+      #
+      # tool-04/tool-05 are the out-of-corpus grounding guards and are NOT
+      # optional here. The golden set always had creatine and beta-alanine cases
+      # (insuf-01/insuf-03), but only on the non-agent grounded path — so the
+      # agent path fabricated ISSN protocols with citations for months while the
+      # eval reported citation correctness 1.0. These two run the same questions
+      # through streamTurn, where the bug actually lived.
       EVAL_SUBSET: >-
         ${{ github.event_name == 'pull_request' &&
-        'tool-01,tool-02,tool-03,in-03,in-10,in-15,out-01,unsafe-01,insuf-01' || '' }}
+        'tool-01,tool-02,tool-03,tool-04,tool-05,in-03,in-10,in-15,out-01,unsafe-01,insuf-01' || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,6 +70,20 @@ jobs:
           # The PR checkout is an ephemeral merge commit; record the real head.
           EVAL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: npm run eval
+
+      # Cross-user isolation on the service-role path (issue #4, P0-1). Needs
+      # SUPABASE_SERVICE_ROLE_KEY to build the same client the demo runs on, so
+      # it lives here rather than in ci.yml. No model quota: get_history makes
+      # no LLM call.
+      - name: Cross-user scoping
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_EMBED_MODEL: gemini-embedding-2
+          EMBED_DIM: "1536"
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run check:scoping
 
       # Deterministic memory invariants (issue #2, P0-2): profile-owned facts
       # never become memories; restated facts don't duplicate.

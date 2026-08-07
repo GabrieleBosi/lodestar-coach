@@ -3,7 +3,13 @@
   publish = ".next"
 
 [build.environment]
-  NODE_VERSION = "20"
+  # 22, matching ci.yml and eval.yml. @supabase/realtime-js (pulled in by
+  # @supabase/supabase-js) needs a native WebSocket, which Node ships only from
+  # 22; on 20 both eval steps died at Supabase client construction. Production
+  # is not currently broken by this — the deployed functions run a
+  # Netlify-managed runtime, not this pin — but building on a version the code
+  # is documented not to support is a difference waiting to matter.
+  NODE_VERSION = "22"
 
 # The official Next.js runtime for Netlify. Netlify installs this plugin
 # automatically when it is declared here.

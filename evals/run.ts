@@ -18,6 +18,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { streamTurn } from "../lib/agent/chat";
 import { readTurnStream as readTurn } from "../lib/chat-stream";
+import { citedNumbers } from "../lib/citations";
 import type { Database } from "../lib/db/types";
 import { readGeminiConfig } from "../lib/llm/gemini";
 import { buildGroundedPrompt } from "../lib/rag/prompt";
@@ -44,6 +45,11 @@ interface GoldenCase {
   forbidden_tools?: string[];
   /** tool_routing cases: turns sent first, in the same conversation, to set up state. */
   prior_turns?: string[];
+  /**
+   * tool_routing cases: the turn must ground nothing — no sources in the
+   * trailer and no [n] marker in the answer (issue #4, P0-2).
+   */
+  must_not_cite?: boolean;
 }
 
 interface JudgeScores {
@@ -140,8 +146,15 @@ function isTransient(err: unknown): boolean {
  * ~62s per failing case, so a bad API day made the run slow AND red. Capping the
  * budget lets a case that recovers on attempt 2–3 still recover, while a case
  * that is simply not going to work gives up fast and is reported by coverage.
+ *
+ * 20s was too tight in practice. The ladder reaches 2+4+8 = 14s by attempt 3, so
+ * the 16s wait was refused and a case that hit two 503s in a row was skipped —
+ * and skipped cases are what drag judged_fraction under its floor and fail the
+ * run for a reason that has nothing to do with the change under test. 60s covers
+ * 2+4+8+16+32 = 62s worth of ladder minus the last step, i.e. a case survives a
+ * genuine spike but a dead model still gives up in about a minute.
  */
-const MAX_BACKOFF_TOTAL_MS = Number(process.env.EVAL_MAX_BACKOFF_MS ?? 20_000);
+const MAX_BACKOFF_TOTAL_MS = Number(process.env.EVAL_MAX_BACKOFF_MS ?? 60_000);
 
 async function withRetry<T>(fn: () => Promise<T>, label: string, maxAttempts = 6): Promise<T> {
   let spent = 0;
@@ -274,11 +287,14 @@ async function setupRoutingHarness(): Promise<RoutingHarness> {
  * trailer's terminator into the metadata (breaking every `expected_tools`
  * assertion) and folded retracted text back into the answer.
  */
-async function readTurnStream(
-  res: Response,
-): Promise<{ answer: string; actions: { name: string; ok?: boolean }[] }> {
+async function readTurnStream(res: Response): Promise<{
+  answer: string;
+  actions: { name: string; ok?: boolean }[];
+  sources: { n: number }[];
+}> {
   let answer = "";
   let actions: { name: string; ok?: boolean }[] = [];
+  let sources: { n: number }[] = [];
   await readTurn(res.body!, {
     onStart: () => {},
     onText: (t) => {
@@ -289,9 +305,10 @@ async function readTurnStream(
     },
     onMeta: (meta) => {
       actions = meta.actions ?? [];
+      sources = meta.sources ?? [];
     },
   });
-  return { answer, actions };
+  return { answer, actions, sources };
 }
 
 async function runToolRoutingCase(
@@ -344,7 +361,7 @@ async function runToolRoutingCase(
     extractMemory: false,
     stage: "eval.request",
   });
-  const { answer, actions } = await readTurnStream(res);
+  const { answer, actions, sources } = await readTurnStream(res);
 
   const called = actions.map((a) => a.name);
   const toolsPresent = (c.expected_tools ?? []).every((t) =>
@@ -352,7 +369,15 @@ async function runToolRoutingCase(
   );
   const forbiddenHit = (c.forbidden_tools ?? []).filter((t) => called.includes(t));
   const answerOk = c.expected_answer_contains ? answer.includes(c.expected_answer_contains) : true;
-  const toolsOk = toolsPresent && answerOk && forbiddenHit.length === 0;
+
+  // Out-of-corpus cases. Both halves are asserted because they fail for
+  // different reasons: a non-empty trailer means retrieval handed over chunks
+  // it had no business grounding with (the P0-2 defect itself), while a marker
+  // in the text means the model invented one it was never given.
+  const markers = [...citedNumbers(answer)];
+  const citeOk = c.must_not_cite ? sources.length === 0 && markers.length === 0 : true;
+
+  const toolsOk = toolsPresent && answerOk && citeOk && forbiddenHit.length === 0;
 
   return {
     id: c.id,
@@ -372,7 +397,9 @@ async function runToolRoutingCase(
       ? `tools ok: ${called.join(",") || "none"}`
       : forbiddenHit.length > 0
         ? `forbidden tool(s) called: ${forbiddenHit.join(",")}; got [${called.join(",")}]`
-        : `expected ${c.expected_tools?.join("+")}${answerOk ? "" : ` and answer containing "${c.expected_answer_contains}"`}; got [${called.join(",")}]`,
+        : !citeOk
+          ? `must not cite, but got ${sources.length} source(s) and marker(s) [${markers.join(",")}]`
+          : `expected ${c.expected_tools?.join("+")}${answerOk ? "" : ` and answer containing "${c.expected_answer_contains}"`}; got [${called.join(",")}]`,
   };
 }
 

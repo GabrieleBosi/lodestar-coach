@@ -17,7 +17,9 @@
     "eval:memory": "tsx evals/memory_check.ts",
     "check:cache": "tsx scripts/check-cache.ts",
     "check:stream": "tsx scripts/check-stream.ts",
-    "check:gaps": "tsx scripts/check-turn-gaps.ts"
+    "check:gaps": "tsx scripts/check-turn-gaps.ts",
+    "check:grounding": "tsx scripts/check-grounding.ts",
+    "check:scoping": "tsx scripts/check-user-scoping.ts"
   },
   "dependencies": {
     "@google/genai": "^2.10.0",

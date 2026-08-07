@@ -52,6 +52,14 @@ jobs:
       - name: Check unanswered-turn detection
         run: npm run check:gaps
 
+      # Guards the retrieval coverage floor (which is what stops the agent
+      # citing unrelated documents for an off-corpus question) and the LaTeX
+      # mapper. Pure functions over measured fixtures — no network, no
+      # credentials, no model quota — so this gate runs on EVERY PR, unlike the
+      # eval, which is pinned to main-targeting ones.
+      - name: Check grounding and answer formatting
+        run: npm run check:grounding
+
       - name: Build
         run: npm run build
         env:
