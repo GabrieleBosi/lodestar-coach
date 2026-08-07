@@ -370,12 +370,28 @@ async function runToolRoutingCase(
   const forbiddenHit = (c.forbidden_tools ?? []).filter((t) => called.includes(t));
   const answerOk = c.expected_answer_contains ? answer.includes(c.expected_answer_contains) : true;
 
-  // Out-of-corpus cases. Both halves are asserted because they fail for
-  // different reasons: a non-empty trailer means retrieval handed over chunks
-  // it had no business grounding with (the P0-2 defect itself), while a marker
-  // in the text means the model invented one it was never given.
+  // Out-of-corpus cases: the answer must not *cite* anything. A marker means the
+  // model claimed grounding it was never given, and a cited source means one was
+  // presented to the reader — the two halves of the P0-2 defect as a user meets
+  // it.
+  //
+  // This deliberately does NOT assert an empty trailer. The trailer accumulates
+  // over every `search_knowledge` call in the turn, not just the one that
+  // matched the question, so an agent that correctly finds nothing and then
+  // searches for what it *can* help with fills it legitimately. Measured on
+  // tool-04: "Is HMB safe, and what dose should I take?" retrieves nothing (0
+  // chunks, floor working), the agent then searched for the topics it offered
+  // instead — creatine, protein, training — and the trailer carried those. The
+  // answer cited none of them and the UI shows none of them, because
+  // `citedSources()` filters by marker (P0-7).
+  //
+  // Asserting on the trailer therefore tested an internal artefact the reader
+  // never sees, and passed only while the corpus was small enough to leave the
+  // agent nothing adjacent to offer. It would have broken on the next document
+  // added, whatever that document was.
   const markers = [...citedNumbers(answer)];
-  const citeOk = c.must_not_cite ? sources.length === 0 && markers.length === 0 : true;
+  const citedSources = sources.filter((s) => markers.includes(s.n));
+  const citeOk = c.must_not_cite ? markers.length === 0 && citedSources.length === 0 : true;
 
   const toolsOk = toolsPresent && answerOk && citeOk && forbiddenHit.length === 0;
 
