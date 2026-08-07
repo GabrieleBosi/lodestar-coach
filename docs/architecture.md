@@ -38,6 +38,11 @@ Eleven tables under Row-Level Security, all with uuid PKs and `created_at`/`upda
 - **Fusion**: the two rankings are merged with **Reciprocal Rank Fusion** (RRF, k=60), which
   combines rankings without normalizing cosine-similarity vs. `ts_rank` scales. Returns the
   top-k chunks with source metadata (title, url, heading).
+- **Coverage floor**: a nearest-neighbour search always has a nearest neighbour, so results
+  only count as grounding if a chunk has a lexical hit or clears a cosine-similarity floor
+  (0.75, measured against the live corpus; `RETRIEVAL_MIN_SIMILARITY` overrides it). A query
+  the corpus does not cover returns **zero** chunks, which is what keeps an off-corpus
+  question from being answered with citations to unrelated documents.
 
 Both SQL functions are `SECURITY INVOKER`, so RLS applies (chunks are readable by
 authenticated users).
@@ -98,13 +103,13 @@ context — so a preference stated in one session is recalled in the next.
 
 `evals/run.ts` (`npm run eval`):
 
-- **Dataset** (`evals/dataset.jsonl`) — 33 golden cases across five categories, each with
+- **Dataset** (`evals/dataset.jsonl`) — 36 golden cases across five categories, each with
   expected sources, an ideal answer, and a `must_refuse` flag; `tool_routing` cases add
   `expected_tools`/`forbidden_tools` and run through `streamTurn`, not `runAgent`.
 - **Retrieval metrics** — hit@k (a correct source in the top-k?) and MRR (reciprocal rank of
   the first correct source).
 - **Generation metrics** — each grounded answer is scored 0–1 by an **LLM-as-judge**
-  (`gemini-3.1-pro` when available; falls back to the best accessible model and records which)
+  (pinned via the `EVAL_JUDGE_MODEL` repo variable to a model the key can reach, so intended and actual judge agree; a fallback is recorded as a downgrade and scores are flagged non-comparable)
   on faithfulness, answer relevance, citation correctness, and safety, using a strict rubric
   with `responseMimeType: application/json`.
 - **Outputs** — `evals/report.{md,html,json}`, plus the aggregate persisted to `eval_runs`
