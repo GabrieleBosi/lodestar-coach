@@ -33,15 +33,17 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6 py-16">
-      <h1 className="text-3xl font-bold tracking-tight">Sign in to Lodestar</h1>
-      <p className="mt-2 text-stone-600 dark:text-stone-400">
+    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center bg-ground px-6 py-16 text-ink">
+      <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent-ink">Lodestar</p>
+      <h1 className="mt-2 text-2xl font-medium tracking-tight">Sign in</h1>
+      <p className="mt-2 text-sm text-ink-muted">
         Enter your email and we&apos;ll send you a magic link — no password needed.
       </p>
 
       {status === "sent" ? (
-        <div className="mt-8 rounded-xl border border-emerald-300 bg-emerald-50 p-4 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
-          Check <strong>{email}</strong> for a sign-in link.
+        <div className="mt-8 rounded-lg border border-line bg-surface p-4 text-sm shadow-[inset_2px_0_0_var(--ok)]">
+          <span className="mr-2 text-ok">✓</span>
+          Check <strong className="font-medium">{email}</strong> for a sign-in link.
         </div>
       ) : (
         <form onSubmit={onSubmit} className="mt-8 flex flex-col gap-3">
@@ -56,20 +58,20 @@ export default function LoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
-            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-stone-900 outline-none focus:border-stone-500 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-100"
+            className="min-h-11 rounded-lg border border-line bg-surface px-3.5 text-ink outline-none focus:border-accent"
           />
           <button
             type="submit"
             disabled={status === "sending"}
-            className="mt-2 rounded-lg bg-stone-900 px-4 py-2 font-medium text-white transition hover:bg-stone-700 disabled:opacity-50 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-300"
+            className="mt-2 min-h-11 rounded-lg border border-accent px-5 font-medium text-accent hover:bg-accent-wash disabled:opacity-45"
           >
             {status === "sending" ? "Sending…" : "Send magic link"}
           </button>
-          {status === "error" && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+          {status === "error" && <p className="text-sm text-err">{error}</p>}
         </form>
       )}
 
-      <p className="mt-8 text-xs text-stone-500 dark:text-stone-500">
+      <p className="mt-8 font-mono text-[10.5px] text-ink-faint">
         Lodestar provides general, evidence-based information and is NOT medical advice.
       </p>
     </main>
