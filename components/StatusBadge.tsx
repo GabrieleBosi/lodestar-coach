@@ -47,14 +47,15 @@ export default function StatusBadge() {
     };
   }, []);
 
-  const base = "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-medium";
+  // A mono status line, not a pill — the same information rendered as
+  // instrumentation rather than a badge (issue #3, D-6 "trust signal styled
+  // like debug output": the styling changes, the live fetch stays).
+  const base = "inline-flex items-center gap-2 font-mono text-xs text-ink-muted";
 
   if (state.status === "loading") {
     return (
-      <span
-        className={`${base} border-stone-300 text-stone-500 dark:border-stone-700 dark:text-stone-400`}
-      >
-        <span className="h-2 w-2 animate-pulse rounded-full bg-stone-400" />
+      <span className={base}>
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink-faint" />
         checking status…
       </span>
     );
@@ -62,21 +63,16 @@ export default function StatusBadge() {
 
   if (state.status === "error") {
     return (
-      <span
-        className={`${base} border-red-300 text-red-700 dark:border-red-900 dark:text-red-400`}
-        title={state.message}
-      >
-        <span className="h-2 w-2 rounded-full bg-red-500" />
+      <span className={base} title={state.message}>
+        <span className="h-1.5 w-1.5 rounded-full bg-err" />
         unavailable
       </span>
     );
   }
 
   return (
-    <span
-      className={`${base} border-emerald-300 text-emerald-700 dark:border-emerald-900 dark:text-emerald-400`}
-    >
-      <span className="h-2 w-2 rounded-full bg-emerald-500" />
+    <span className={base}>
+      <span className="h-1.5 w-1.5 rounded-full bg-ok" />
       healthy · {state.health.chatModel}
     </span>
   );
