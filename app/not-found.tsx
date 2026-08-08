@@ -9,28 +9,30 @@ export const metadata = { title: "Page not found" };
  */
 export default function NotFound() {
   return (
-    <main className="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center gap-4 px-6 text-center">
-      <p className="text-sm font-semibold uppercase tracking-wider text-stone-500">404</p>
-      <h1 className="text-2xl font-bold tracking-tight">This page doesn&apos;t exist</h1>
-      <p className="text-sm text-stone-500 dark:text-stone-400">
+    <main className="mx-auto flex min-h-dvh max-w-lg flex-col justify-center gap-4 bg-ground px-6 text-ink">
+      <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent-ink">
+        404 — not found
+      </p>
+      <h1 className="text-2xl font-medium tracking-tight">This page doesn&apos;t exist</h1>
+      <p className="text-sm text-ink-muted">
         The link may be out of date, or the address mistyped.
       </p>
-      <div className="mt-2 flex flex-wrap justify-center gap-2">
+      <div className="mt-2 flex flex-wrap gap-2">
         <Link
           href="/"
-          className="rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+          className="flex min-h-11 items-center rounded-lg border border-line px-4 text-sm font-medium no-underline hover:bg-ink/5"
         >
           Home
         </Link>
         <Link
           href="/demo"
-          className="rounded-lg border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+          className="flex min-h-11 items-center rounded-lg border border-line px-4 text-sm font-medium no-underline hover:bg-ink/5"
         >
           Try the demo
         </Link>
         <Link
           href="/app"
-          className="rounded-lg border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+          className="flex min-h-11 items-center rounded-lg border border-line px-4 text-sm font-medium no-underline hover:bg-ink/5"
         >
           Sign in
         </Link>

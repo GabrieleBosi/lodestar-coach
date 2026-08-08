@@ -1,33 +1,120 @@
 @import "tailwindcss";
 
+/*
+ * Lodestar tokens — Nocturne-derived (dark #161826 ground, blurple accent as a
+ * line/mark), light theme re-seated on the same OKLCH hues. Product semantics
+ * (ok/warn/err) sit on the ramps' shared lightness scale. Fonts arrive via
+ * next/font variables --font-plex-sans / --font-plex-mono (see layout.tsx).
+ */
+
 :root {
-  --background: #fafaf9;
-  --foreground: #1c1917;
+  /* light */
+  --ground: #eef0f8;
+  --surface: #f9fafd;
+  --ink: #23252f;
+  --ink-muted: rgb(35 37 47 / 0.62);
+  --ink-faint: rgb(35 37 47 / 0.42);
+  --line: rgb(35 37 47 / 0.15);
+  --line-faint: rgb(35 37 47 / 0.08);
+  --accent: #796cbf; /* accent-600: borders, marks, icons */
+  --accent-ink: #5d5294; /* accent-700: small interactive text ≥4.5:1 */
+  --accent-wash: rgb(121 108 191 / 0.1);
+  --bubble: #e7e5fe; /* accent-200: user turn */
+  --ok: oklch(0.52 0.09 168);
+  --warn: oklch(0.55 0.1 83);
+  --warn-ink: oklch(0.4 0.08 83);
+  --warn-wash: oklch(0.55 0.1 83 / 0.08);
+  --err: oklch(0.5 0.11 25);
+  --section: #262a60; /* landing stat band — both schemes */
+  --shadow-pop: 0 0 0 1px rgb(35 37 47 / 0.08), 0 6px 18px rgb(23 25 48 / 0.12);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --ground: #161826;
+    --surface: #232532;
+    --ink: #e9e9ed;
+    --ink-muted: rgb(233 233 237 / 0.62);
+    --ink-faint: rgb(233 233 237 / 0.42);
+    --line: rgb(233 233 237 / 0.16);
+    --line-faint: rgb(233 233 237 / 0.09);
+    --accent: #9184d9; /* accent-500 */
+    --accent-ink: #b5abfc; /* accent-400 */
+    --accent-wash: rgb(145 132 217 / 0.12);
+    --bubble: #2b2741; /* accent-900 */
+    --ok: oklch(0.72 0.1 168);
+    --warn: oklch(0.76 0.1 83);
+    --warn-ink: oklch(0.85 0.07 85);
+    --warn-wash: oklch(0.76 0.1 83 / 0.09);
+    --err: oklch(0.7 0.12 25);
+    --shadow-pop: 0 0 0 1px #595d6c, 0 6px 18px rgb(0 0 0 / 0.55);
   }
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-line: var(--line);
+  --color-line-faint: var(--line-faint);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-wash: var(--accent-wash);
+  --color-bubble: var(--bubble);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-warn-ink: var(--warn-ink);
+  --color-warn-wash: var(--warn-wash);
+  --color-err: var(--err);
+  --color-section: var(--section);
+  --font-sans: var(--font-plex-sans), system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--ground);
+  color: var(--ink);
+}
+
+/* Themed interaction states — never browser defaults (Nocturne). */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* Freestanding rules fade to transparent over 48px ends (Nocturne signature). */
+.rule-fade {
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--line) 48px calc(100% - 48px),
+    transparent
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse {
+    animation: none;
+  }
 }
 
 /*
- * Minimal structural rules for rendered assistant answers (issue #2, D-1).
- * Tailwind's preflight resets list markers and heading sizes, so markdown that
- * is correctly *parsed* still renders as an undifferentiated run without these.
- * Structure only — the typographic scale belongs to issue #3.
+ * Rendered assistant answers — the real typographic scale (replaces the D-1
+ * structural placeholder). Font-size inherits from the chat container (15px
+ * desktop / 14px compact) so the same block serves both clients.
  */
+.markdown-body {
+  line-height: 1.65;
+}
 .markdown-body > :first-child {
   margin-top: 0;
 }
@@ -39,29 +126,31 @@ body {
 .markdown-body ol,
 .markdown-body blockquote,
 .markdown-body table {
-  margin: 0.5rem 0;
+  margin: 0.6em 0;
 }
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3,
 .markdown-body h4 {
-  margin: 0.9rem 0 0.35rem;
-  font-weight: 600;
+  margin: 1.1em 0 0.4em;
+  font-weight: 500;
   line-height: 1.3;
+  letter-spacing: -0.01em;
 }
 .markdown-body h1 {
-  font-size: 1.15em;
+  font-size: 1.2em;
 }
 .markdown-body h2 {
-  font-size: 1.08em;
+  font-size: 1.12em;
 }
 .markdown-body h3,
 .markdown-body h4 {
   font-size: 1em;
+  font-weight: 600;
 }
 .markdown-body ul,
 .markdown-body ol {
-  padding-left: 1.25rem;
+  padding-left: 1.3em;
 }
 .markdown-body ul {
   list-style: disc;
@@ -70,11 +159,11 @@ body {
   list-style: decimal;
 }
 .markdown-body li {
-  margin: 0.15rem 0;
+  margin: 0.2em 0;
 }
 .markdown-body li > ul,
 .markdown-body li > ol {
-  margin: 0.15rem 0;
+  margin: 0.2em 0;
 }
 .markdown-body strong {
   font-weight: 600;
@@ -83,54 +172,97 @@ body {
   font-style: italic;
 }
 .markdown-body a {
+  color: var(--accent-ink);
   text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .markdown-body code {
   border-radius: 0.25rem;
-  background: rgb(0 0 0 / 0.06);
-  padding: 0.1em 0.3em;
-  font-size: 0.9em;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  padding: 0.1em 0.35em;
+  font-family: var(--font-plex-mono), ui-monospace, monospace;
+  font-size: 0.88em;
 }
 .markdown-body pre {
   overflow-x: auto;
   border-radius: 0.5rem;
-  background: rgb(0 0 0 / 0.06);
-  padding: 0.6rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--line-faint);
+  padding: 0.7rem 0.85rem;
 }
 .markdown-body pre code {
   background: none;
   padding: 0;
+  font-size: 0.85em;
 }
 .markdown-body blockquote {
-  border-left: 3px solid rgb(0 0 0 / 0.15);
-  padding-left: 0.7rem;
+  border-left: 2px solid var(--accent);
+  padding-left: 0.8rem;
+  color: var(--ink-muted);
 }
 .markdown-body table {
   display: block;
   overflow-x: auto;
   border-collapse: collapse;
 }
-.markdown-body th,
-.markdown-body td {
-  border: 1px solid rgb(0 0 0 / 0.12);
-  padding: 0.25rem 0.5rem;
+.markdown-body th {
+  font-family: var(--font-plex-mono), ui-monospace, monospace;
+  font-size: 0.75em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--ink-muted);
   text-align: left;
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+.markdown-body td {
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--line-faint);
+  font-variant-numeric: tabular-nums;
 }
 .markdown-body hr {
-  margin: 0.75rem 0;
-  border-top: 1px solid rgb(0 0 0 / 0.12);
+  margin: 1em 0;
+  border: 0;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--line) 32px calc(100% - 32px),
+    transparent
+  );
 }
-@media (prefers-color-scheme: dark) {
-  .markdown-body code,
-  .markdown-body pre {
-    background: rgb(255 255 255 / 0.08);
-  }
-  .markdown-body blockquote {
-    border-left-color: rgb(255 255 255 / 0.2);
-  }
-  .markdown-body th,
-  .markdown-body td,
-  .markdown-body hr {
-    border-color: rgb(255 255 255 / 0.18);
-  }
+
+/*
+ * Marker -> ledger cross-highlight (issue #3, D-4): hovering an [n] marker in
+ * the transcript tints the ledger row whose document carries that citation
+ * number. Generated for n = 1-9 -- citations per answer are single-digit in
+ * practice; a rare two-digit marker simply doesn't highlight (harmless).
+ */
+:root:has([data-transcript] [data-cite-n="1"]:hover) [data-cite-doc~="1"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="2"]:hover) [data-cite-doc~="2"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="3"]:hover) [data-cite-doc~="3"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="4"]:hover) [data-cite-doc~="4"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="5"]:hover) [data-cite-doc~="5"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="6"]:hover) [data-cite-doc~="6"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="7"]:hover) [data-cite-doc~="7"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="8"]:hover) [data-cite-doc~="8"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="9"]:hover) [data-cite-doc~="9"] {
+  background: var(--accent-wash);
 }

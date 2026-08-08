@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
 interface Profile {
@@ -62,15 +61,7 @@ export default function ProfileForm() {
 
   return (
     <main className="mx-auto max-w-lg px-6 py-10">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">Your profile</h1>
-        <Link
-          href="/app"
-          className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
-        >
-          ← Back to chat
-        </Link>
-      </div>
+      <h1 className="mb-6 text-2xl font-bold tracking-tight">Your profile</h1>
       <p className="mb-6 text-sm text-stone-500 dark:text-stone-400">
         Lodestar uses this to personalize coaching and compute your energy targets. Everything is
         optional and private to you.

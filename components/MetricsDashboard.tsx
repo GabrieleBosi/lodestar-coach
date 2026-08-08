@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
 interface Metrics {
@@ -25,12 +24,14 @@ const formatUsd = (n: number) => `$${n.toFixed(4)}`;
 
 function Card({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-xl border border-stone-200 p-4 dark:border-stone-800">
-      <div className="text-xs uppercase tracking-wider text-stone-500 dark:text-stone-400">
+    <div className="rounded-lg border border-line p-4">
+      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
         {label}
       </div>
-      <div className="mt-1 text-2xl font-bold tabular-nums">{value}</div>
-      {sub ? <div className="text-xs text-stone-500">{sub}</div> : null}
+      <div className="mt-2 font-mono text-[26px] font-medium leading-none tabular-nums">
+        {value}
+      </div>
+      {sub ? <div className="mt-1.5 font-mono text-[10.5px] text-ink-faint">{sub}</div> : null}
     </div>
   );
 }
@@ -39,9 +40,11 @@ function BarChart({ data, label }: { data: { label: string; value: number }[]; l
   const max = Math.max(1, ...data.map((d) => d.value));
   return (
     <div>
-      <h3 className="mb-2 text-sm font-semibold">{label}</h3>
+      <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
+        {label}
+      </h3>
       {data.length === 0 ? (
-        <p className="text-xs text-stone-500">No data yet.</p>
+        <p className="text-xs text-ink-faint">No data yet.</p>
       ) : (
         // A three-column grid, not a flex row. The row used to be
         // `w-20 shrink-0` for the label with no overflow handling, so a name
@@ -73,20 +76,20 @@ function BarChart({ data, label }: { data: { label: string; value: number }[]; l
               key={d.label}
               className="grid grid-cols-[minmax(0,9rem)_1fr_minmax(3.5rem,auto)] items-center gap-2 text-xs"
             >
-              <span className="truncate text-stone-500" title={d.label}>
+              <span className="truncate font-mono text-[11px] text-ink-muted" title={d.label}>
                 {d.label}
               </span>
               <span
-                className="h-4 w-full"
+                className="h-2 w-full rounded-sm bg-ink/5"
                 role="img"
                 aria-label={`${d.label}: ${formatCount(d.value)}`}
               >
                 <span
-                  className="block h-full rounded bg-emerald-500/80"
+                  className={`block h-full rounded-sm ${d.value === max ? "bg-accent" : "bg-accent/60"}`}
                   style={{ width: `${(d.value / max) * 100}%`, minWidth: d.value ? "2px" : "0" }}
                 />
               </span>
-              <span className="text-right tabular-nums text-stone-600 dark:text-stone-300">
+              <span className="text-right font-mono text-[11px] tabular-nums text-ink/75">
                 {formatCount(d.value)}
               </span>
             </li>
@@ -117,8 +120,8 @@ export default function MetricsDashboard() {
     <main className="mx-auto max-w-4xl px-6 py-10">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Metrics</h1>
-          <p className="text-sm text-stone-500 dark:text-stone-400">
+          <h1 className="text-[25px] font-medium tracking-tight">Metrics</h1>
+          <p className="text-sm text-ink-muted">
             {/*
               A <code> element, not backticks: JSX text is not markdown, so the
               backticks rendered literally on the page. Sized to inherit rather
@@ -129,18 +132,12 @@ export default function MetricsDashboard() {
             {metrics?.days ?? 14} days).
           </p>
         </div>
-        <Link
-          href="/app"
-          className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
-        >
-          ← Back to chat
-        </Link>
       </div>
 
       {loading ? (
-        <p className="text-sm text-stone-500">Loading…</p>
+        <p className="text-sm text-ink-faint">Loading…</p>
       ) : error ? (
-        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        <p className="text-sm text-err">{error}</p>
       ) : metrics ? (
         <div className="space-y-8">
           <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -168,11 +165,19 @@ export default function MetricsDashboard() {
               data={metrics.tools.map((t) => ({ label: t.stage, value: t.count }))}
             />
             <div>
-              <h3 className="mb-2 text-sm font-semibold">Retrieval hit-rate</h3>
-              <div className="text-3xl font-bold">
+              <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
+                Retrieval hit-rate
+              </h3>
+              <div className="font-mono text-3xl font-medium tabular-nums">
                 {(metrics.retrieval.hitRate * 100).toFixed(0)}%
               </div>
-              <p className="text-xs text-stone-500">
+              <div className="mt-2 h-1 w-full rounded-sm bg-ink/5">
+                <div
+                  className="h-full rounded-sm bg-accent"
+                  style={{ width: `${metrics.retrieval.hitRate * 100}%` }}
+                />
+              </div>
+              <p className="mt-1.5 text-xs text-ink-faint">
                 {metrics.retrieval.hits}/{metrics.retrieval.searches} knowledge searches returned
                 context
               </p>
@@ -180,28 +185,36 @@ export default function MetricsDashboard() {
           </section>
 
           <section>
-            <h3 className="mb-2 text-sm font-semibold">Cost per day</h3>
+            <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
+              Cost per day
+            </h3>
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-stone-500">
-                  <th className="py-1">Date</th>
-                  <th>Requests</th>
-                  <th>Tokens</th>
-                  <th>Est. cost</th>
+                <tr className="font-mono text-[11px] uppercase tracking-[0.08em] text-ink-muted">
+                  <th className="py-1 text-left font-medium">Date</th>
+                  <th className="text-right font-medium">Requests</th>
+                  <th className="text-right font-medium">Tokens</th>
+                  <th className="text-right font-medium">Est. cost</th>
                 </tr>
               </thead>
               <tbody>
                 {metrics.byDay.map((d) => (
-                  <tr key={d.date} className="border-t border-stone-200 dark:border-stone-800">
+                  <tr key={d.date} className="border-t border-line-faint">
                     <td className="py-1">{d.date}</td>
-                    <td className="tabular-nums">{d.requests}</td>
-                    <td className="tabular-nums">{formatCount(d.tokens)}</td>
-                    <td className="tabular-nums">{formatUsd(d.costUsd)}</td>
+                    <td className="text-right font-mono text-[12.5px] tabular-nums">
+                      {d.requests}
+                    </td>
+                    <td className="text-right font-mono text-[12.5px] tabular-nums">
+                      {formatCount(d.tokens)}
+                    </td>
+                    <td className="text-right font-mono text-[12.5px] tabular-nums">
+                      {formatUsd(d.costUsd)}
+                    </td>
                   </tr>
                 ))}
                 {metrics.byDay.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="py-2 text-stone-500">
+                    <td colSpan={4} className="py-2 text-ink-faint">
                       No requests recorded yet.
                     </td>
                   </tr>

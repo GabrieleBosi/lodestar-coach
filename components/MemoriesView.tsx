@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 interface Memory {
@@ -36,15 +35,7 @@ export default function MemoriesView() {
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-12">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">What the coach remembers</h1>
-        <Link
-          href="/app"
-          className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
-        >
-          ← Back to chat
-        </Link>
-      </div>
+      <h1 className="mb-6 text-2xl font-bold tracking-tight">What the coach remembers</h1>
 
       <p className="mb-6 text-sm text-stone-500 dark:text-stone-400">
         These are durable facts Lodestar has saved to personalize your coaching. Delete anything you
