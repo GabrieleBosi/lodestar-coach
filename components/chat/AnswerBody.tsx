@@ -13,6 +13,7 @@ import { cloneElement, isValidElement, Fragment, type ReactElement, type ReactNo
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import CitationPopover from "@/components/chat/CitationPopover";
 import { citedNumbers, MARKER, numbersIn } from "@/lib/citations";
 import { stripLatex } from "@/lib/text/latex";
 
@@ -73,6 +74,9 @@ export function groupCitedSources(text: string, citations: Citation[] | undefine
 /** Elements whose text is not prose and must not be rewritten. */
 const OPAQUE = new Set(["code", "pre", "a"]);
 
+/** Shared base for all three marker states — the states themselves are load-bearing (P0-6). */
+const sup = "mx-0.5 align-super font-mono text-[10px] leading-none";
+
 function CitationMarker({ n, source }: { n: number; source: Citation | undefined | null }) {
   // `undefined` = the turn hasn't delivered its trailer yet; `null` = it has,
   // and nothing matched. A pending marker must never look resolved.
@@ -80,7 +84,7 @@ function CitationMarker({ n, source }: { n: number; source: Citation | undefined
     return (
       <sup
         title="Resolving source…"
-        className="mx-0.5 animate-pulse rounded bg-stone-300/60 px-1 text-[10px] text-transparent dark:bg-stone-600/60"
+        className={`${sup} animate-pulse rounded-[3px] bg-ink/20 px-1 text-transparent`}
         aria-label={`Citation ${n}, resolving`}
       >
         [{n}]
@@ -91,7 +95,7 @@ function CitationMarker({ n, source }: { n: number; source: Citation | undefined
     return (
       <sup
         title="No matching source was returned for this citation"
-        className="mx-0.5 text-[10px] text-stone-400 line-through dark:text-stone-500"
+        className={`${sup} text-ink-faint line-through`}
       >
         [{n}]
       </sup>
@@ -99,21 +103,34 @@ function CitationMarker({ n, source }: { n: number; source: Citation | undefined
   }
   const label = source.title ?? "Source";
   const body = (
-    <sup className="mx-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
+    <sup
+      className={`${sup} rounded-[3px] font-medium text-accent-ink group-hover/cite:bg-accent-wash`}
+    >
       [{n}]
     </sup>
   );
+  const popover = (
+    <CitationPopover title={label} heading={source.heading} hasUrl={source.sourceUrl != null} />
+  );
+  const wrapper = "group/cite relative inline-block focus-visible:outline-2";
   return source.sourceUrl ? (
     <a
       href={source.sourceUrl}
       target="_blank"
       rel="noopener noreferrer"
       title={source.heading ? `${label} · ${source.heading}` : label}
+      className={wrapper}
+      data-cite-n={n}
     >
       {body}
+      {popover}
     </a>
   ) : (
-    <span title={label}>{body}</span>
+    // tabIndex so keyboard and touch reach the popover on URL-less sources too.
+    <span title={label} className={wrapper} data-cite-n={n} tabIndex={0}>
+      {body}
+      {popover}
+    </span>
   );
 }
 
