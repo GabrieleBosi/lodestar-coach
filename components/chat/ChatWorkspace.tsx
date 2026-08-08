@@ -1,10 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import AnswerBody, { type Citation, groupCitedSources } from "@/components/chat/AnswerBody";
-import SignOutButton from "@/components/SignOutButton";
 import { isFailedTurn, readTurnStream, TURN_FAILED } from "@/lib/chat-stream";
 import { MAX_MESSAGE_LEN } from "@/lib/limits";
 import { msUntilGapSettles, withGapMarkers } from "@/lib/turn-gaps";
@@ -68,13 +66,9 @@ function newId(): string {
     : Math.random().toString(36).slice(2);
 }
 
-export default function ChatWorkspace({
-  userEmail,
-  isAdmin = false,
-}: {
-  userEmail: string;
-  isAdmin?: boolean;
-}) {
+// `isAdmin` gates the Metrics link in the mobile drawer (handoff §6); the shell
+// owns the desktop tab row.
+export default function ChatWorkspace({ isAdmin = false }: { isAdmin?: boolean }) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -442,37 +436,7 @@ export default function ChatWorkspace({
   const sources = groupCitedSources(lastAssistant?.content ?? "", lastAssistant?.citations);
 
   return (
-    <div className="mx-auto flex h-screen max-w-6xl flex-col px-4 py-4">
-      <header className="flex items-center justify-between border-b border-stone-200 pb-3 dark:border-stone-800">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Lodestar</h1>
-          <p className="text-xs text-stone-500 dark:text-stone-400">{userEmail}</p>
-        </div>
-        <nav className="flex flex-wrap items-center justify-end gap-1.5">
-          <Link
-            href="/profile"
-            className="rounded-lg border border-stone-300 px-2.5 py-1.5 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
-          >
-            Profile
-          </Link>
-          <Link
-            href="/memories"
-            className="rounded-lg border border-stone-300 px-2.5 py-1.5 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
-          >
-            Memory
-          </Link>
-          {isAdmin && (
-            <Link
-              href="/app/metrics"
-              className="rounded-lg border border-stone-300 px-2.5 py-1.5 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
-            >
-              Metrics
-            </Link>
-          )}
-          <SignOutButton />
-        </nav>
-      </header>
-
+    <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-4">
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 py-4 md:grid-cols-[200px_1fr_260px]">
         {/* Conversation history */}
         <aside className="hidden min-h-0 flex-col md:flex">
@@ -738,12 +702,6 @@ export default function ChatWorkspace({
           </div>
         </aside>
       </div>
-
-      <footer className="border-t border-stone-200 pt-3 text-center text-xs text-stone-500 dark:border-stone-800 dark:text-stone-400">
-        Lodestar provides general, evidence-based information and is{" "}
-        <strong className="font-semibold">NOT medical advice</strong>. Consult a qualified
-        professional for individual circumstances.
-      </footer>
     </div>
   );
 }

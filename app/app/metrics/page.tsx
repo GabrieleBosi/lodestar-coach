@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import AppShell from "@/components/AppShell";
 import MetricsDashboard from "@/components/MetricsDashboard";
 import { isAdminEmail } from "@/lib/auth/admin";
 import { createSupabaseServerClient } from "@/lib/db/supabase";
@@ -16,5 +17,11 @@ export default async function MetricsPage() {
   if (!user) redirect("/login");
   if (!isAdminEmail(user.email)) redirect("/app");
 
-  return <MetricsDashboard />;
+  return (
+    <AppShell userEmail={user.email ?? "signed in"} active="Metrics" isAdmin>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <MetricsDashboard />
+      </div>
+    </AppShell>
+  );
 }

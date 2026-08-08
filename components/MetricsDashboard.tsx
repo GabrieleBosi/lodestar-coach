@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
 interface Metrics {
@@ -129,12 +128,6 @@ export default function MetricsDashboard() {
             {metrics?.days ?? 14} days).
           </p>
         </div>
-        <Link
-          href="/app"
-          className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
-        >
-          ← Back to chat
-        </Link>
       </div>
 
       {loading ? (

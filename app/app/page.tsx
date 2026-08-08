@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import AppShell from "@/components/AppShell";
 import ChatWorkspace from "@/components/chat/ChatWorkspace";
 import { isAdminEmail } from "@/lib/auth/admin";
 import { createSupabaseServerClient } from "@/lib/db/supabase";
@@ -17,8 +18,12 @@ export default async function AppPage() {
     redirect("/login");
   }
 
-  // The dashboard had no link anywhere in the UI — reachable only by typing the
-  // path (issue #2, P1). Gated by the same predicate the page itself enforces,
-  // so the link can't appear for someone who would be redirected away.
-  return <ChatWorkspace userEmail={user.email ?? "signed in"} isAdmin={isAdminEmail(user.email)} />;
+  // Metrics stays gated by the same predicate the page itself enforces, so the
+  // tab can't appear for someone who would be redirected away (issue #2, P1).
+  const isAdmin = isAdminEmail(user.email);
+  return (
+    <AppShell userEmail={user.email ?? "signed in"} active="Chat" isAdmin={isAdmin}>
+      <ChatWorkspace isAdmin={isAdmin} />
+    </AppShell>
+  );
 }
