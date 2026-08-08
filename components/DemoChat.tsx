@@ -43,7 +43,7 @@ function RetryButton({ onClick, disabled }: { onClick: () => void; disabled: boo
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="mt-2 rounded-md border border-amber-400 px-2 py-1 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:hover:bg-amber-900/40"
+      className="mt-2 min-h-9 rounded-lg border border-warn/55 px-3.5 text-[13px] font-medium text-warn hover:bg-warn/10 disabled:opacity-45"
     >
       Retry
     </button>
@@ -163,24 +163,27 @@ export default function DemoChat() {
   const sources = groupCitedSources(lastAssistant?.content ?? "", lastAssistant?.citations);
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-6">
+    <div className="mx-auto flex min-h-dvh max-w-3xl flex-col bg-ground px-4 py-6 text-ink">
       <header className="mb-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Lodestar — live demo</h1>
-          <p className="text-xs text-stone-500 dark:text-stone-400">
-            No signup. Pre-seeded with a demo athlete&apos;s training history.
+        <div className="flex items-baseline gap-3">
+          <h1 className="font-medium tracking-tight">Lodestar</h1>
+          <p className="font-mono text-[11px] text-ink-faint">
+            live demo · no signup · pre-seeded athlete history
           </p>
         </div>
-        <Link href="/" className="text-sm text-stone-500 underline">
+        <Link
+          href="/"
+          className="font-mono text-[12.5px] text-ink-muted no-underline hover:text-accent-ink"
+        >
           Home
         </Link>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-stone-200 dark:border-stone-800">
+      <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-line-faint">
         <div ref={scrollRef} className="min-h-[50vh] flex-1 space-y-4 overflow-y-auto p-4">
           {messages.length === 0 ? (
             <div className="mt-6 text-center">
-              <p className="text-sm text-stone-500 dark:text-stone-400">
+              <p className="text-sm text-ink-muted">
                 Try one of these — answers are grounded in the knowledge base and cited.
               </p>
               <div className="mt-4 flex flex-wrap justify-center gap-2">
@@ -189,7 +192,7 @@ export default function DemoChat() {
                     key={s}
                     type="button"
                     onClick={() => void send(s)}
-                    className="rounded-full border border-stone-300 px-3 py-1.5 text-xs hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+                    className="min-h-11 rounded-full border border-line px-4 text-[13px] hover:border-accent hover:bg-accent-wash"
                   >
                     {s}
                   </button>
@@ -211,49 +214,44 @@ export default function DemoChat() {
                   }
                 >
                   {m.role === "assistant" && !failed && m.actions && m.actions.length > 0 && (
-                    <div className="mb-1 flex flex-wrap gap-1">
+                    <div className="mb-1.5 flex flex-wrap gap-1.5">
                       {m.actions.map((a, i) => (
                         <span
                           key={i}
-                          className="rounded-full border border-stone-300 px-2 py-0.5 text-[11px] text-stone-500 dark:border-stone-700 dark:text-stone-400"
+                          className="inline-flex items-center gap-1.5 rounded-[5px] border border-line px-2 py-0.5 font-mono text-[10.5px] text-ink-muted"
                         >
-                          ⚙ {a.summary ?? a.name}
+                          <span className="h-1.5 w-1.5 rounded-full bg-ok" />
+                          {a.summary ?? a.name}
                         </span>
                       ))}
                     </div>
                   )}
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
-                      m.role === "user"
-                        ? "whitespace-pre-wrap bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
-                        : failed
-                          ? "border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
-                          : "bg-stone-100 text-stone-900 dark:bg-stone-800 dark:text-stone-100"
-                    }`}
-                  >
-                    {m.role !== "assistant" ? (
-                      m.content
-                    ) : failed ? (
-                      <>
-                        <p>
-                          {m.content || "This turn didn't finish, so there's no answer to show."}
-                        </p>
-                        <RetryButton onClick={() => retryFrom(m.id)} disabled={busy} />
-                      </>
-                    ) : m.content ? (
-                      <>
-                        <AnswerBody content={m.content} citations={m.citations} />
-                        {m.truncated && (
-                          <div className="mt-2 border-t border-amber-300 pt-2 text-xs text-amber-800 dark:border-amber-900 dark:text-amber-300">
-                            <p>The connection dropped before this answer finished.</p>
-                            <RetryButton onClick={() => retryFrom(m.id)} disabled={busy} />
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      (busy && "…") || ""
-                    )}
-                  </div>
+                  {m.role === "user" ? (
+                    <div className="max-w-[75%] whitespace-pre-wrap rounded-[10px] bg-bubble px-3.5 py-2 text-sm text-ink">
+                      {m.content}
+                    </div>
+                  ) : failed ? (
+                    <div className="max-w-[85%] rounded-[10px] border border-warn/40 bg-warn-wash px-4 py-3 text-sm text-warn-ink shadow-[inset_2px_0_0_var(--warn)]">
+                      <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.12em] text-warn">
+                        Turn failed
+                      </div>
+                      <p>{m.content || "This turn didn't finish, so there's no answer to show."}</p>
+                      <RetryButton onClick={() => retryFrom(m.id)} disabled={busy} />
+                    </div>
+                  ) : m.content ? (
+                    <div className="w-full text-sm leading-[1.65] text-ink/85">
+                      <AnswerBody content={m.content} citations={m.citations} />
+                      {m.truncated && (
+                        <div className="mt-3 border-t border-warn/40 pt-2 text-xs text-warn-ink">
+                          <p>The connection dropped before this answer finished.</p>
+                          <RetryButton onClick={() => retryFrom(m.id)} disabled={busy} />
+                        </div>
+                      )}
+                      <div className="rule-fade mt-4" />
+                    </div>
+                  ) : (
+                    (busy && <span className="text-ink-faint">…</span>) || ""
+                  )}
                 </div>
               );
             })
@@ -261,17 +259,21 @@ export default function DemoChat() {
         </div>
 
         {sources.length > 0 && (
-          <div className="border-t border-stone-200 px-4 py-2 text-xs dark:border-stone-800">
-            <span className="font-semibold">Sources: </span>
+          <div className="border-t border-line-faint px-4 py-2.5 text-xs">
+            <span className="mr-2 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
+              Sources
+            </span>
             {sources.map((g) => (
-              <span key={g.key} className="mr-2">
-                {g.entries.map((e) => `[${e.n}]`).join("")}{" "}
+              <span key={g.key} className="mr-3">
+                <span className="font-mono text-[10px] text-accent-ink">
+                  {g.entries.map((e) => `[${e.n}]`).join("")}
+                </span>{" "}
                 {g.sourceUrl ? (
                   <a
                     href={g.sourceUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-emerald-700 underline dark:text-emerald-400"
+                    className="text-accent-ink underline"
                   >
                     {g.title}
                   </a>
@@ -288,7 +290,7 @@ export default function DemoChat() {
             e.preventDefault();
             void send(input);
           }}
-          className="flex gap-2 border-t border-stone-200 p-3 dark:border-stone-800"
+          className="border-t border-line-faint p-3"
         >
           {/*
             Mirrors the authenticated composer. The demo route already enforced
@@ -296,34 +298,40 @@ export default function DemoChat() {
             the same asymmetry fixed for /api/chat, inverted, on the page a
             stranger sees first.
           */}
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                void send(input);
-              }
-            }}
-            rows={2}
-            maxLength={MAX_DEMO_MESSAGE_LEN}
-            placeholder="Ask about training, nutrition, or recovery…  (Shift+Enter for a new line)"
-            disabled={busy}
-            className="flex-1 resize-y rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none focus:border-stone-500 disabled:opacity-50 dark:border-stone-700 dark:bg-stone-900"
-          />
-          <button
-            type="submit"
-            disabled={busy || !input.trim()}
-            className="rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700 disabled:opacity-50 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-300"
-          >
-            {busy ? "…" : "Send"}
-          </button>
+          <div className="flex gap-2">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  void send(input);
+                }
+              }}
+              rows={1}
+              maxLength={MAX_DEMO_MESSAGE_LEN}
+              placeholder="Ask about training, nutrition, or recovery…"
+              disabled={busy}
+              className="max-h-40 min-h-11 flex-1 resize-none rounded-[10px] border border-line bg-surface px-3.5 py-[11px] text-sm outline-none focus:border-accent disabled:opacity-45"
+            />
+            <button
+              type="submit"
+              disabled={busy || !input.trim()}
+              className="min-h-11 rounded-[10px] border border-accent px-[18px] text-sm font-medium text-accent hover:bg-accent-wash disabled:opacity-45"
+            >
+              {busy ? "…" : "Send"}
+            </button>
+          </div>
+          <div className="mt-1.5 flex justify-between font-mono text-[10.5px] text-ink-faint">
+            <span>Enter sends · Shift+Enter for a new line</span>
+            <span>{input.length.toLocaleString("en-US")} / 500</span>
+          </div>
         </form>
       </div>
 
-      <p className="mt-4 text-center text-xs text-stone-500 dark:text-stone-400">
+      <p className="mt-4 text-center font-mono text-[10.5px] text-ink-faint">
         Lodestar provides general, evidence-based information and is{" "}
-        <strong className="font-semibold">NOT medical advice</strong>. The public demo is
+        <strong className="font-medium text-warn">NOT medical advice</strong>. The public demo is
         rate-limited and shared.
       </p>
     </div>

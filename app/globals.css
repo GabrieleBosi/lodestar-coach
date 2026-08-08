@@ -232,3 +232,37 @@ body {
     transparent
   );
 }
+
+/*
+ * Marker -> ledger cross-highlight (issue #3, D-4): hovering an [n] marker in
+ * the transcript tints the ledger row whose document carries that citation
+ * number. Generated for n = 1-9 -- citations per answer are single-digit in
+ * practice; a rare two-digit marker simply doesn't highlight (harmless).
+ */
+:root:has([data-transcript] [data-cite-n="1"]:hover) [data-cite-doc~="1"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="2"]:hover) [data-cite-doc~="2"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="3"]:hover) [data-cite-doc~="3"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="4"]:hover) [data-cite-doc~="4"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="5"]:hover) [data-cite-doc~="5"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="6"]:hover) [data-cite-doc~="6"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="7"]:hover) [data-cite-doc~="7"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="8"]:hover) [data-cite-doc~="8"] {
+  background: var(--accent-wash);
+}
+:root:has([data-transcript] [data-cite-n="9"]:hover) [data-cite-doc~="9"] {
+  background: var(--accent-wash);
+}

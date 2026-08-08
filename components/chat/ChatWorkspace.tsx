@@ -76,7 +76,23 @@ export default function ChatWorkspace({ isAdmin = false }: { isAdmin?: boolean }
   const [streaming, setStreaming] = useState(false);
   const [loadError, setLoadError] = useState<{ id: string; message: string } | null>(null);
   const [filter, setFilter] = useState("");
+  // View-only booleans for the mobile drawer + sources sheet. They touch no
+  // turn lifecycle, fetch, or URL handling (handoff §6).
+  const [navOpen, setNavOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow the composer to its content, capped (handoff §6). View-only.
+  const growComposer = useCallback(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, []);
+  useEffect(() => {
+    if (input === "") growComposer();
+  }, [input, growComposer]);
 
   // Which view the transcript belongs to. Every async write checks it before
   // applying, so a turn or a load that resolves after the user has moved on is
@@ -435,273 +451,388 @@ export default function ChatWorkspace({ isAdmin = false }: { isAdmin?: boolean }
   // Only what the answer cites — a refusal retrieves chunks too (P0-7).
   const sources = groupCitedSources(lastAssistant?.content ?? "", lastAssistant?.citations);
 
+  const citedNs = sources.flatMap((g) => g.entries.map((e) => e.n));
+  const minN = citedNs.length ? Math.min(...citedNs) : 0;
+  const maxN = citedNs.length ? Math.max(...citedNs) : 0;
+
+  const sidebar = (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          setNavOpen(false);
+          openNewChat();
+        }}
+        className="mb-2 min-h-10 rounded-lg border border-accent px-3 text-sm font-medium text-accent hover:bg-accent-wash"
+      >
+        + New chat
+      </button>
+      {/*
+        The title is the first question truncated, so asking the same thing
+        twice produces two identical rows. Search and a timestamp are what make
+        them tellable apart (issue #2, P1).
+      */}
+      <input
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        placeholder="Search chats"
+        aria-label="Search conversations"
+        className="mb-2 rounded-lg border border-line bg-surface px-2.5 py-1 text-xs outline-none focus:border-accent"
+      />
+      <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
+        {visibleConversations.length === 0 && (
+          <p className="px-2 py-1.5 text-xs text-ink-faint">
+            {conversations.length === 0 ? "No chats yet." : "No chats match that search."}
+          </p>
+        )}
+        {visibleConversations.map((c) => (
+          <div
+            key={c.id}
+            className={`group flex items-center gap-1 rounded-md pr-1 hover:bg-ink/5 ${
+              c.id === conversationId
+                ? "bg-accent-wash font-medium shadow-[inset_2px_0_0_var(--accent)]"
+                : ""
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setNavOpen(false);
+                selectConversation(c.id);
+              }}
+              className="min-h-11 min-w-0 flex-1 px-2.5 py-[7px] text-left text-sm"
+              title={c.title ?? "Untitled"}
+            >
+              <span className="block truncate">{c.title ?? "Untitled"}</span>
+              <span className="block font-mono text-[10px] text-ink-faint">
+                {formatWhen(c.updated_at)}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void deleteConversation(c.id)}
+              aria-label={`Delete conversation: ${c.title ?? "Untitled"}`}
+              title="Delete"
+              className="rounded px-1 text-xs text-ink-faint opacity-0 hover:text-err focus:opacity-100 group-hover:opacity-100"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+
+  const ledger =
+    sources.length === 0 ? (
+      <p className="text-xs text-ink-faint">Citations for the latest answer appear here.</p>
+    ) : (
+      <div className="space-y-3" data-ledger>
+        {sources.map((g) => (
+          <div
+            key={g.key}
+            data-cite-doc={g.entries.map((e) => e.n).join(" ")}
+            className="rounded-r-md border-l-2 border-accent pl-3"
+          >
+            <div className="text-[13px] font-medium text-ink">{g.title}</div>
+            <ul className="mt-0.5 space-y-0.5">
+              {g.entries.map((e) => (
+                <li key={e.n} className="font-mono text-[10px] text-accent-ink">
+                  [{e.n}]
+                  {e.heading ? (
+                    <span className="ml-1 font-sans text-[11.5px] text-ink-muted">{e.heading}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            {g.sourceUrl ? (
+              <a
+                href={g.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 block truncate font-mono text-[10.5px] text-accent-ink underline"
+              >
+                {g.sourceUrl}
+              </a>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    );
+
   return (
-    <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-4">
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 py-4 md:grid-cols-[200px_1fr_260px]">
-        {/* Conversation history */}
-        <aside className="hidden min-h-0 flex-col md:flex">
+    <div className="mx-auto grid min-h-0 w-full max-w-6xl flex-1 grid-cols-1 md:grid-cols-[248px_1fr_300px]">
+      {/* Conversation history (desktop) */}
+      <aside className="hidden min-h-0 flex-col p-3 md:flex md:border-r md:border-line-faint">
+        {sidebar}
+      </aside>
+
+      {/* Nav drawer (below md) */}
+      {navOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-30 bg-black/50 md:hidden"
+            onClick={() => setNavOpen(false)}
+            aria-hidden="true"
+          />
+          <div
+            id="nav-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Conversations"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setNavOpen(false);
+            }}
+            className="fixed inset-y-0 left-0 z-40 flex w-[308px] flex-col bg-ground p-3 shadow-[var(--shadow-pop)] md:hidden"
+          >
+            {sidebar}
+            <div className="mt-2 space-y-0.5 border-t border-line-faint pt-2">
+              {[
+                { href: "/profile", label: "Profile" },
+                { href: "/memories", label: "Memory" },
+                ...(isAdmin ? [{ href: "/app/metrics", label: "Metrics" }] : []),
+              ].map((l) => (
+                <a
+                  key={l.href}
+                  href={l.href}
+                  className="flex min-h-11 items-center rounded-md px-2.5 font-mono text-[12.5px] text-ink-muted no-underline hover:bg-ink/5"
+                >
+                  {l.label}
+                </a>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Transcript + composer */}
+      <section className="flex min-h-0 flex-col">
+        {/* Mobile top bar: drawer trigger + sources pill */}
+        <div className="flex items-center gap-2 border-b border-line-faint px-3 py-2 md:hidden">
           <button
             type="button"
-            onClick={openNewChat}
-            className="mb-2 rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+            onClick={() => setNavOpen(true)}
+            aria-expanded={navOpen}
+            aria-controls="nav-drawer"
+            aria-label="Open conversations"
+            className="flex h-11 w-11 items-center justify-center rounded-lg border border-line text-ink-muted hover:bg-ink/5"
           >
-            + New chat
+            ☰
           </button>
-          {/*
-            The title is the first question truncated, so asking the same thing
-            twice produces two identical rows. Search and a timestamp are what
-            make them tellable apart; grouping by date belongs to the design
-            pass (issue #2, P1).
-          */}
-          <input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Search chats"
-            aria-label="Search conversations"
-            className="mb-2 rounded-md border border-stone-300 bg-white px-2 py-1 text-xs outline-none focus:border-stone-500 dark:border-stone-700 dark:bg-stone-900"
-          />
-          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
-            {visibleConversations.length === 0 && (
-              <p className="px-2 py-1.5 text-xs text-stone-400">
-                {conversations.length === 0 ? "No chats yet." : "No chats match that search."}
-              </p>
-            )}
-            {visibleConversations.map((c) => (
-              <div
-                key={c.id}
-                className={`group flex items-center gap-1 rounded-md pr-1 hover:bg-stone-100 dark:hover:bg-stone-800 ${
-                  c.id === conversationId ? "bg-stone-100 dark:bg-stone-800" : ""
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => selectConversation(c.id)}
-                  className="min-w-0 flex-1 px-2 py-1.5 text-left text-sm"
-                  title={c.title ?? "Untitled"}
-                >
-                  <span
-                    className={`block truncate ${c.id === conversationId ? "font-medium" : ""}`}
-                  >
-                    {c.title ?? "Untitled"}
-                  </span>
-                  <span className="block text-[11px] text-stone-500 dark:text-stone-400">
-                    {formatWhen(c.updated_at)}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void deleteConversation(c.id)}
-                  aria-label={`Delete conversation: ${c.title ?? "Untitled"}`}
-                  title="Delete"
-                  className="rounded px-1 text-xs text-stone-400 opacity-0 hover:text-red-600 focus:opacity-100 group-hover:opacity-100 dark:hover:text-red-400"
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-        </aside>
+          {sources.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setSourcesOpen(true)}
+              className="ml-auto min-h-11 rounded-full border border-line px-3 font-mono text-[11px] text-accent-ink hover:bg-accent-wash"
+            >
+              [{minN}–{maxN}] · {sources.length} src
+            </button>
+          )}
+        </div>
 
-        {/* Transcript + composer */}
-        <section className="flex min-h-0 flex-col rounded-xl border border-stone-200 dark:border-stone-800">
-          <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-            {loadError && (
-              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm dark:border-amber-900 dark:bg-amber-950/40">
-                <p className="text-amber-900 dark:text-amber-200">{loadError.message}</p>
-                <div className="mt-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void loadConversation(loadError.id)}
-                    className="rounded-md border border-amber-400 px-2 py-1 text-xs font-medium hover:bg-amber-100 dark:border-amber-800 dark:hover:bg-amber-900/40"
-                  >
-                    Retry
-                  </button>
-                  <button
-                    type="button"
-                    onClick={openNewChat}
-                    className="rounded-md border border-stone-300 px-2 py-1 text-xs hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
-                  >
-                    Start a new chat
-                  </button>
-                </div>
-              </div>
-            )}
-            {messages.length === 0 && !loadError && (
-              <div className="mt-10 text-center text-sm text-stone-500 dark:text-stone-400">
-                Ask about training, nutrition, or recovery — answers are grounded in the knowledge
-                base and cited.
-              </div>
-            )}
-            {messages.map((m) => {
-              // Two ways a turn can lack an answer: the server persisted a row
-              // saying so, or no row exists at all and the gap was detected on
-              // load. Neither may render as an answer (P0-4). A gap that could
-              // still be running gets no retry — a second turn would cost
-              // another generation and duplicate the question.
-              const pending = m.gap === "pending";
-              const failed =
-                m.role === "assistant" &&
-                (m.gap === "failed" || isFailedTurn(m.actions) || (m.truncated && !m.content));
-              return (
-                <div
-                  key={m.id}
-                  className={m.role === "user" ? "flex justify-end" : "flex flex-col items-start"}
+        <div
+          ref={scrollRef}
+          className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4"
+          data-transcript
+        >
+          {loadError && (
+            <div className="rounded-[10px] border border-warn/40 bg-warn-wash px-4 py-3 text-sm text-warn-ink shadow-[inset_2px_0_0_var(--warn)]">
+              <p>{loadError.message}</p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void loadConversation(loadError.id)}
+                  className="min-h-9 rounded-lg border border-warn/55 px-3.5 text-[13px] font-medium text-warn hover:bg-warn/10"
                 >
-                  {m.role === "assistant" &&
-                    !failed &&
-                    !pending &&
-                    m.actions &&
-                    m.actions.length > 0 && (
-                      <div className="mb-1 flex flex-wrap gap-1">
-                        {m.actions.map((a, i) => (
+                  Retry
+                </button>
+                <button
+                  type="button"
+                  onClick={openNewChat}
+                  className="min-h-9 rounded-lg border border-line px-3.5 text-[13px] hover:bg-ink/5"
+                >
+                  Start a new chat
+                </button>
+              </div>
+            </div>
+          )}
+          {messages.length === 0 && !loadError && (
+            <div className="mt-10 text-center text-sm text-ink-muted">
+              Ask about training, nutrition, or recovery — answers are grounded in the knowledge
+              base and cited.
+            </div>
+          )}
+          {messages.map((m) => {
+            // Two ways a turn can lack an answer: the server persisted a row
+            // saying so, or no row exists at all and the gap was detected on
+            // load. Neither may render as an answer (P0-4). A gap that could
+            // still be running gets no retry — a second turn would cost
+            // another generation and duplicate the question.
+            const pending = m.gap === "pending";
+            const failed =
+              m.role === "assistant" &&
+              (m.gap === "failed" || isFailedTurn(m.actions) || (m.truncated && !m.content));
+            return (
+              <div
+                key={m.id}
+                className={m.role === "user" ? "flex justify-end" : "flex flex-col items-start"}
+              >
+                {m.role === "assistant" &&
+                  !failed &&
+                  !pending &&
+                  m.actions &&
+                  m.actions.length > 0 && (
+                    <div className="mb-1.5 flex flex-wrap gap-1.5">
+                      {m.actions.map((a, i) => (
+                        <span
+                          key={i}
+                          title={a.error ?? a.summary ?? a.name}
+                          className={`inline-flex items-center gap-1.5 rounded-[5px] border px-2 py-0.5 font-mono text-[10.5px] ${
+                            a.ok === false ? "border-err/40 text-err" : "border-line text-ink-muted"
+                          }`}
+                        >
                           <span
-                            key={i}
-                            title={a.error ?? a.summary ?? a.name}
-                            className={`rounded-full border px-2 py-0.5 text-[11px] ${
-                              a.ok === false
-                                ? "border-red-300 text-red-600 dark:border-red-900 dark:text-red-400"
-                                : "border-stone-300 text-stone-500 dark:border-stone-700 dark:text-stone-400"
-                            }`}
-                          >
-                            {a.ok === false ? "⚠ " : "⚙ "}
-                            {a.summary ?? a.name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
-                      m.role === "user"
-                        ? "self-end whitespace-pre-wrap bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
-                        : failed
-                          ? "border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
-                          : pending
-                            ? "border border-stone-300 bg-transparent text-stone-500 dark:border-stone-700 dark:text-stone-400"
-                            : "bg-stone-100 text-stone-900 dark:bg-stone-800 dark:text-stone-100"
-                    }`}
-                  >
-                    {m.role !== "assistant" ? (
-                      m.content
-                    ) : pending ? (
-                      <p className="animate-pulse">{m.content}</p>
-                    ) : failed ? (
-                      <>
-                        <p>{m.content || "This turn didn't produce an answer."}</p>
+                            className={`h-1.5 w-1.5 rounded-full ${a.ok === false ? "bg-err" : "bg-ok"}`}
+                          />
+                          {a.summary ?? a.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                {m.role === "user" ? (
+                  <div className="max-w-[75%] whitespace-pre-wrap rounded-[10px] bg-bubble px-3.5 py-2 text-sm text-ink">
+                    {m.content}
+                  </div>
+                ) : pending ? (
+                  <div className="max-w-[85%] animate-pulse rounded-[10px] border border-line px-4 py-3 text-ink-muted">
+                    <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
+                      Turn in progress
+                    </div>
+                    {m.content}
+                  </div>
+                ) : failed ? (
+                  <div className="max-w-[85%] rounded-[10px] border border-warn/40 bg-warn-wash px-4 py-3 text-warn-ink shadow-[inset_2px_0_0_var(--warn)]">
+                    <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.12em] text-warn">
+                      Turn failed
+                    </div>
+                    <p>{m.content || "This turn didn't produce an answer."}</p>
+                    <button
+                      type="button"
+                      onClick={() => retryFrom(m.id)}
+                      disabled={streaming}
+                      className="mt-2 min-h-9 rounded-lg border border-warn/55 px-3.5 text-[13px] font-medium text-warn hover:bg-warn/10 disabled:opacity-45"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : m.content ? (
+                  <div className="w-full text-[15px] leading-[1.65] text-ink/85">
+                    <AnswerBody content={m.content} citations={m.citations} />
+                    {m.truncated && (
+                      <div className="mt-3 border-t border-warn/40 pt-2 text-xs text-warn-ink">
+                        <p>The connection dropped before this answer finished.</p>
                         <button
                           type="button"
                           onClick={() => retryFrom(m.id)}
                           disabled={streaming}
-                          className="mt-2 rounded-md border border-amber-400 px-2 py-1 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:hover:bg-amber-900/40"
+                          className="mt-1 min-h-9 rounded-lg border border-warn/55 px-3.5 text-[13px] font-medium text-warn hover:bg-warn/10 disabled:opacity-45"
                         >
                           Retry
                         </button>
-                      </>
-                    ) : m.content ? (
-                      <>
-                        <AnswerBody content={m.content} citations={m.citations} />
-                        {m.truncated && (
-                          <div className="mt-2 border-t border-amber-300 pt-2 text-xs text-amber-800 dark:border-amber-900 dark:text-amber-300">
-                            <p>The connection dropped before this answer finished.</p>
-                            <button
-                              type="button"
-                              onClick={() => retryFrom(m.id)}
-                              disabled={streaming}
-                              className="mt-1 rounded-md border border-amber-400 px-2 py-1 font-medium hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:hover:bg-amber-900/40"
-                            >
-                              Retry
-                            </button>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      (streaming && "…") || ""
+                      </div>
                     )}
+                    <div className="rule-fade mt-4" />
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                ) : (
+                  (streaming && <span className="text-ink-faint">…</span>) || ""
+                )}
+              </div>
+            );
+          })}
+        </div>
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void send();
-            }}
-            className="flex gap-2 border-t border-stone-200 p-3 dark:border-stone-800"
-          >
-            {/*
-              A textarea, not an input: a coaching question routinely runs to
-              several lines, and a single-line field made anything long unusable
-              to review before sending. Enter still sends, Shift+Enter is the
-              newline. `maxLength` mirrors the server's own limit rather than
-              letting the request fail after the fact. Auto-grow is left to the
-              design pass.
-            */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send();
+          }}
+          className="border-t border-line-faint p-3"
+        >
+          <div className="flex gap-2">
             <textarea
+              ref={taRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onInput={growComposer}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   void send();
                 }
               }}
-              rows={2}
+              rows={1}
               maxLength={MAX_MESSAGE_LEN}
-              placeholder="How should I structure a deload week?  (Shift+Enter for a new line)"
+              placeholder="Ask about training, nutrition, or recovery…"
               disabled={streaming}
-              className="flex-1 resize-y rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none focus:border-stone-500 disabled:opacity-50 dark:border-stone-700 dark:bg-stone-900"
+              className="max-h-40 min-h-11 flex-1 resize-none rounded-[10px] border border-line bg-surface px-3.5 py-[11px] text-sm outline-none focus:border-accent disabled:opacity-45"
             />
             <button
               type="submit"
               disabled={streaming || !input.trim()}
-              className="rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700 disabled:opacity-50 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-300"
+              className="min-h-11 rounded-[10px] border border-accent px-[18px] text-sm font-medium text-accent hover:bg-accent-wash disabled:opacity-45"
             >
               {streaming ? "…" : "Send"}
             </button>
-          </form>
-        </section>
-
-        {/* Sources panel */}
-        <aside className="hidden min-h-0 flex-col rounded-xl border border-stone-200 p-3 md:flex dark:border-stone-800">
-          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
-            Sources
-          </h2>
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
-            {sources.length === 0 ? (
-              <p className="text-xs text-stone-400">Citations for the latest answer appear here.</p>
-            ) : (
-              sources.map((g) => (
-                <div key={g.key} className="text-xs">
-                  <span className="font-semibold">{g.entries.map((e) => `[${e.n}]`).join("")}</span>{" "}
-                  {g.title}
-                  {g.entries.some((e) => e.heading) && (
-                    <ul className="mt-0.5 ml-3 list-disc text-stone-500 dark:text-stone-400">
-                      {g.entries
-                        .filter((e) => e.heading)
-                        .map((e) => (
-                          <li key={e.n}>
-                            [{e.n}] {e.heading}
-                          </li>
-                        ))}
-                    </ul>
-                  )}
-                  {g.sourceUrl ? (
-                    <a
-                      href={g.sourceUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block truncate text-emerald-700 underline dark:text-emerald-400"
-                    >
-                      {g.sourceUrl}
-                    </a>
-                  ) : null}
-                </div>
-              ))
-            )}
           </div>
-        </aside>
-      </div>
+          <div className="mt-1.5 flex justify-between font-mono text-[10.5px] text-ink-faint">
+            <span>Enter sends · Shift+Enter for a new line</span>
+            <span>{input.length.toLocaleString("en-US")} / 2,000</span>
+          </div>
+        </form>
+      </section>
+
+      {/* Sources panel (desktop) */}
+      <aside className="hidden min-h-0 flex-col p-3 md:flex md:border-l md:border-line-faint">
+        <h2 className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
+          Sources
+        </h2>
+        <div className="min-h-0 flex-1 overflow-y-auto">{ledger}</div>
+      </aside>
+
+      {/* Sources sheet (below md) */}
+      {sourcesOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-30 bg-black/50 md:hidden"
+            onClick={() => setSourcesOpen(false)}
+            aria-hidden="true"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Sources"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setSourcesOpen(false);
+            }}
+            className="fixed inset-x-0 bottom-0 z-40 max-h-[70vh] overflow-y-auto rounded-t-2xl bg-surface p-4 shadow-[var(--shadow-pop)] md:hidden"
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
+                Sources
+              </h2>
+              <button
+                type="button"
+                onClick={() => setSourcesOpen(false)}
+                aria-label="Close sources"
+                className="flex h-9 w-9 items-center justify-center rounded-lg text-ink-muted hover:bg-ink/5"
+              >
+                ✕
+              </button>
+            </div>
+            {ledger}
+          </div>
+        </>
+      )}
     </div>
   );
 }
