@@ -41,6 +41,14 @@ interface GoldenCase {
   expected_tools?: string[];
   /** tool_routing cases: substring the final answer must contain. */
   expected_answer_contains?: string;
+  /**
+   * tool_routing cases: at least ONE of these substrings must appear. For
+   * asserting "the answer surfaced the seeded data" without pinning the model
+   * to one phrasing — tool-02 required the literal "102.5" and failed four
+   * consecutive CI runs on answers that faithfully described the seeded
+   * session by set scheme or RPE instead of by load.
+   */
+  expected_answer_contains_any?: string[];
   /** tool_routing cases: tools that must NOT be called on the final turn. */
   forbidden_tools?: string[];
   /** tool_routing cases: turns sent first, in the same conversation, to set up state. */
@@ -368,7 +376,11 @@ async function runToolRoutingCase(
     actions.some((a) => a.name === t && a.ok !== false),
   );
   const forbiddenHit = (c.forbidden_tools ?? []).filter((t) => called.includes(t));
-  const answerOk = c.expected_answer_contains ? answer.includes(c.expected_answer_contains) : true;
+  const answerOk =
+    (c.expected_answer_contains ? answer.includes(c.expected_answer_contains) : true) &&
+    (c.expected_answer_contains_any
+      ? c.expected_answer_contains_any.some((t) => answer.includes(t))
+      : true);
 
   // Out-of-corpus cases: the answer must not *cite* anything. A marker means the
   // model claimed grounding it was never given, and a cited source means one was
@@ -415,7 +427,7 @@ async function runToolRoutingCase(
         ? `forbidden tool(s) called: ${forbiddenHit.join(",")}; got [${called.join(",")}]`
         : !citeOk
           ? `must not cite, but got ${sources.length} source(s) and marker(s) [${markers.join(",")}]`
-          : `expected ${c.expected_tools?.join("+")}${answerOk ? "" : ` and answer containing "${c.expected_answer_contains}"`}; got [${called.join(",")}]`,
+          : `expected ${c.expected_tools?.join("+")}${answerOk ? "" : ` and answer containing ${c.expected_answer_contains ? `"${c.expected_answer_contains}"` : `one of ${JSON.stringify(c.expected_answer_contains_any)}`}`}; got [${called.join(",")}]`,
   };
 }
 
