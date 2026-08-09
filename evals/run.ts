@@ -41,6 +41,14 @@ interface GoldenCase {
   expected_tools?: string[];
   /** tool_routing cases: substring the final answer must contain. */
   expected_answer_contains?: string;
+  /**
+   * tool_routing cases: at least ONE of these substrings must appear. For
+   * asserting "the answer surfaced the seeded data" without pinning the model
+   * to one phrasing — tool-02 required the literal "102.5" and failed four
+   * consecutive CI runs on answers that faithfully described the seeded
+   * session by set scheme or RPE instead of by load.
+   */
+  expected_answer_contains_any?: string[];
   /** tool_routing cases: tools that must NOT be called on the final turn. */
   forbidden_tools?: string[];
   /** tool_routing cases: turns sent first, in the same conversation, to set up state. */
@@ -137,7 +145,9 @@ function isModelUnavailable(err: unknown): boolean {
 function isTransient(err: unknown): boolean {
   const s = err instanceof Error ? err.message : String(err);
   if (isModelUnavailable(err)) return false; // don't waste retries on a dead model
-  return /429|503|RESOURCE_EXHAUSTED|UNAVAILABLE|overloaded/i.test(s);
+  // 500/INTERNAL: Gemini's transient server error. Without it, in-10 was
+  // "skipped: 500 INTERNAL" instead of retried (run 31319491231).
+  return /429|500|503|INTERNAL|RESOURCE_EXHAUSTED|UNAVAILABLE|overloaded/i.test(s);
 }
 
 /**
@@ -311,6 +321,36 @@ async function readTurnStream(res: Response): Promise<{
   return { answer, actions, sources };
 }
 
+/**
+ * The agent degrades gracefully instead of throwing (deliberate product
+ * behaviour), so a provider failure inside a routing case surfaces as this
+ * message with zero tool calls — which the report then records as a routing
+ * failure. lib/agent/loop.ts's transient list also misses 500/INTERNAL, so a
+ * single Gemini 500 becomes tools=[] in one hop. Substring-matched here to
+ * classify the attempt as UNMEASURED rather than failed.
+ */
+const DEGRADED_MARKER = "having trouble reaching the model";
+
+/**
+ * Was this attempt a measurement at all?
+ *
+ * Two inconclusive shapes, both observed across the six red runs on PRs #21/#22
+ * (2026-08-09, ~13:30–15:00 UTC) while full-set runs on main passed in the same
+ * window:
+ *  - the degraded fallback answer (provider error swallowed by the agent), and
+ *  - zero tool calls on a case whose whole point is that a tool must be called
+ *    — the shape a provider-side dropped function call produces.
+ * A genuine routing regression (the P0-1 class: code stripping tools) is
+ * deterministic and fails every attempt identically, so bounded retry cannot
+ * launder it green. What retry removes is single-sample provider noise being
+ * recorded as a routing verdict.
+ */
+function routingAttemptInconclusive(c: GoldenCase, r: CaseResult): boolean {
+  if (r.answer.includes(DEGRADED_MARKER)) return true;
+  if ((c.expected_tools?.length ?? 0) > 0 && (r.toolsCalled?.length ?? 0) === 0) return true;
+  return false;
+}
+
 async function runToolRoutingCase(
   harness: RoutingHarness,
   provider: ReturnType<typeof createScriptProvider>,
@@ -368,7 +408,11 @@ async function runToolRoutingCase(
     actions.some((a) => a.name === t && a.ok !== false),
   );
   const forbiddenHit = (c.forbidden_tools ?? []).filter((t) => called.includes(t));
-  const answerOk = c.expected_answer_contains ? answer.includes(c.expected_answer_contains) : true;
+  const answerOk =
+    (c.expected_answer_contains ? answer.includes(c.expected_answer_contains) : true) &&
+    (c.expected_answer_contains_any
+      ? c.expected_answer_contains_any.some((t) => answer.includes(t))
+      : true);
 
   // Out-of-corpus cases: the answer must not *cite* anything. A marker means the
   // model claimed grounding it was never given, and a cited source means one was
@@ -415,7 +459,7 @@ async function runToolRoutingCase(
         ? `forbidden tool(s) called: ${forbiddenHit.join(",")}; got [${called.join(",")}]`
         : !citeOk
           ? `must not cite, but got ${sources.length} source(s) and marker(s) [${markers.join(",")}]`
-          : `expected ${c.expected_tools?.join("+")}${answerOk ? "" : ` and answer containing "${c.expected_answer_contains}"`}; got [${called.join(",")}]`,
+          : `expected ${c.expected_tools?.join("+")}${answerOk ? "" : ` and answer containing ${c.expected_answer_contains ? `"${c.expected_answer_contains}"` : `one of ${JSON.stringify(c.expected_answer_contains_any)}`}`}; got [${called.join(",")}]`,
   };
 }
 
@@ -503,7 +547,29 @@ async function main() {
   for (const c of selected) {
     if (c.category === "tool_routing") {
       try {
-        const result = await runToolRoutingCase(await getHarness(), provider, c);
+        // Bounded retry on inconclusive attempts only. Each attempt creates a
+        // fresh conversation inside runToolRoutingCase, so retries cannot
+        // contaminate each other's history.
+        const ROUTING_ATTEMPTS = 3;
+        const RETRY_WAIT_MS = [5_000, 15_000];
+        let result = await runToolRoutingCase(await getHarness(), provider, c);
+        for (let attempt = 1; attempt < ROUTING_ATTEMPTS; attempt++) {
+          if (!routingAttemptInconclusive(c, result)) break;
+          const why = result.answer.includes(DEGRADED_MARKER)
+            ? "provider-degraded answer"
+            : `zero tool calls (answer tail: "${result.answer.slice(-80)}")`;
+          const wait = RETRY_WAIT_MS[attempt - 1] ?? 15_000;
+          console.log(
+            `  [${c.id}] attempt ${attempt} inconclusive — ${why}; retrying in ${wait / 1000}s`,
+          );
+          await sleep(wait);
+          result = await runToolRoutingCase(await getHarness(), provider, c);
+        }
+        if (routingAttemptInconclusive(c, result)) {
+          console.log(
+            `  [${c.id}] still inconclusive after ${ROUTING_ATTEMPTS} attempts — recording the failure; the log above names the provider as the cause`,
+          );
+        }
         results.push(result);
         console.log(
           `${result.toolsOk ? "✓" : "✗"} ${c.id} [tool_routing] tools=[${result.toolsCalled?.join(",")}] ok=${result.toolsOk}`,
