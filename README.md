@@ -4,10 +4,10 @@
 
 🔗 **[Live demo (no signup)](https://lodestar-coach.netlify.app/demo)** · 🏠 [Landing](https://lodestar-coach.netlify.app) · 📐 [Architecture](docs/architecture.md) · 🧭 [Decision log](docs/decisions.md)
 
-![Lodestar interface, illustrated](docs/img/demo.gif)
+![Lodestar — landing page, with a real cited answer as the hero specimen](docs/img/landing.png)
 
-<sub>An animated illustration of the interface, not a screen recording — the
-[live demo](https://lodestar-coach.netlify.app/demo) is the accurate view.</sub>
+<sub>Real screenshots of the running app at this commit — or skip them and try the
+[live demo](https://lodestar-coach.netlify.app/demo).</sub>
 
 > **Disclaimer:** Lodestar provides general, evidence-based information and is **NOT medical advice**.
 
@@ -124,16 +124,20 @@ no judged case at all, fails the run rather than averaging over whatever survive
 > as many cases as quota allows and always writes a report — but a run that judges too
 > few **fails**, it does not pass on what survived.
 
-## Interface diagrams
+## Screenshots
 
-These are **hand-drawn diagrams, not screenshots** — they lay out the structure of
-each surface and are drawn light-on-light, while the product follows the viewer's
-colour scheme. Treat them as annotated wireframes; the
-[live demo](https://lodestar-coach.netlify.app/demo) is the accurate view.
+Captured from the running app at this commit. Nothing is staged — the chat answer
+below was produced live by the deployed pipeline during capture, tool call, citations
+and all.
 
-| Grounded, cited chat                      | Admin metrics dashboard                         |
-| ----------------------------------------- | ----------------------------------------------- |
-| ![Chat layout diagram](docs/img/chat.svg) | ![Metrics layout diagram](docs/img/metrics.svg) |
+![A real cited answer in the public demo — tool chip, inline citation markers, grounded content](docs/img/chat.png)
+
+The product follows the viewer's colour scheme and works at phone widths — one
+token set drives both themes:
+
+| Light scheme                                        | Mobile (390px)                            |
+| --------------------------------------------------- | ----------------------------------------- |
+| ![Landing, light theme](docs/img/landing-light.png) | ![Landing on mobile](docs/img/mobile.png) |
 
 ## Tech stack
 
@@ -277,10 +281,6 @@ status report rather than a retrospective.
   grounded refusal rather than an invented answer — the eval keeps two off-corpus
   canaries (HMB, beta-alanine) to hold that line — but a seed set is still a coverage
   ceiling, not a library.
-- **Visual design is unaddressed.** Spacing, type scale, sidebar date grouping and the
-  metrics chart labels are tracked in
-  [#3](https://github.com/GabrieleBosi/lodestar-coach/issues/3). This README describes
-  behaviour, not polish.
 
 ## What I'd build next
 

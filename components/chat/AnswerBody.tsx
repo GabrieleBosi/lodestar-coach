@@ -112,7 +112,9 @@ function CitationMarker({ n, source }: { n: number; source: Citation | undefined
   const popover = (
     <CitationPopover title={label} heading={source.heading} hasUrl={source.sourceUrl != null} />
   );
-  const wrapper = "group/cite relative inline-block focus-visible:outline-2";
+  // no-underline: the wrapper <a> otherwise inherits .markdown-body a's underline,
+  // which draws a stray rule under every resolved marker.
+  const wrapper = "group/cite relative inline-block no-underline focus-visible:outline-2";
   return source.sourceUrl ? (
     <a
       href={source.sourceUrl}
