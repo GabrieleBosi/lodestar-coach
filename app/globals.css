@@ -176,6 +176,11 @@ body {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+/* Citation-marker anchors are not prose links: the no-underline utility loses
+   to .markdown-body a on specificity, so the exemption lives here. */
+.markdown-body a[data-cite-n] {
+  text-decoration: none;
+}
 .markdown-body code {
   border-radius: 0.25rem;
   background: color-mix(in srgb, var(--ink) 7%, transparent);
